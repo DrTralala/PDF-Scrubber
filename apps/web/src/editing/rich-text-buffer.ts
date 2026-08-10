@@ -11,6 +11,7 @@ export type EditorRichTextRun = Readonly<{
   fontId: string;
   fontIntent: RichFontIntent;
   decorations: TextDecorations;
+  sourceRunIndex?: number | null;
 }>;
 
 export type RichTextFormatPatch = Readonly<{
@@ -29,11 +30,13 @@ function ownedRun(run: EditorRichTextRun): EditorRichTextRun {
     fontId: run.fontId,
     fontIntent: run.fontIntent,
     decorations: Object.freeze({ ...run.decorations }),
+    sourceRunIndex: run.sourceRunIndex ?? null,
   });
 }
 
 function samePresentation(left: EditorRichTextRun, right: EditorRichTextRun): boolean {
-  return left.fontId === right.fontId &&
+  return (left.sourceRunIndex ?? null) === (right.sourceRunIndex ?? null) &&
+    left.fontId === right.fontId &&
     left.fontIntent === right.fontIntent &&
     left.decorations.underline === right.decorations.underline &&
     left.decorations.strikethrough === right.decorations.strikethrough &&

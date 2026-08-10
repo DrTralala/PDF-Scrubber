@@ -78,6 +78,19 @@ async function fontUploadFixture(): Promise<Buffer> {
   return Buffer.from(await document.save({ useObjectStreams: false }));
 }
 
+async function sellerAppendFixture(): Promise<Buffer> {
+  const document = await PDFDocument.create();
+  const page = document.addPage([595, 842]);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  page.drawText('Seller: BroadLink Official Store', {
+    x: 72,
+    y: 700,
+    font,
+    size: 22,
+  });
+  return Buffer.from(await document.save({ useObjectStreams: false }));
+}
+
 test('opens, applies two validated edits, downloads, and resets', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const remoteRequests = await installNoNetworkGuard(page);
@@ -186,6 +199,37 @@ test('edits inferred wkhtmltopdf groups and preserves mixed style runs', async (
     name: 'this is a firm text — Editable',
   })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Download copy' })).toBeEnabled();
+  expect(remoteRequests).toEqual([]);
+});
+
+test('auto-fits a safe horizontal Seller append without the width slider', async ({ page }) => {
+  const remoteRequests = await installNoNetworkGuard(page);
+  await page.goto('/');
+  await page.getByLabel('Open PDF').setInputFiles({
+    name: 'seller-append.pdf',
+    mimeType: 'application/pdf',
+    buffer: await sellerAppendFixture(),
+  });
+  await selectByPointer(
+    page,
+    page.getByRole('button', {
+      name: 'Seller: BroadLink Official Store — Editable',
+    }),
+  );
+
+  await page.getByLabel('Edit selected text').fill(
+    'Seller: BroadLink Official Store Preferred',
+  );
+  await acceptRichFontSubstitutions(page);
+
+  const widthSlider = page.getByLabel('Allowed width');
+  const initialWidth = await widthSlider.inputValue();
+  await expect(page.getByRole('button', { name: 'Apply replacement' })).toBeEnabled();
+  expect(await widthSlider.inputValue()).not.toBe(initialWidth);
+  await page.getByRole('button', { name: 'Apply replacement' }).click();
+  await expect(page.getByRole('button', {
+    name: 'Seller: BroadLink Official Store Preferred — Editable',
+  })).toBeVisible();
   expect(remoteRequests).toEqual([]);
 });
 

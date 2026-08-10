@@ -65,6 +65,52 @@ describe('rich engine sessions', () => {
     expect(opened.fonts.map(({ inspection }) => inspection.weight).sort()).toEqual([400, 700]);
   });
 
+  test('rejects a rich payload with invalid source-run provenance', async () => {
+    const regularBytes = new Uint8Array(await readFile(regularFontPath));
+    const engine = new PdfEngineSessions({
+      limits: PROVISIONAL_LIMITS,
+      substituteFont: {
+        bytes: regularBytes,
+        family: 'Noto Sans',
+        version: '5.3.0',
+        licence: 'OFL-1.1',
+        source: '@fontsource/noto-sans',
+      },
+      validator: async () => validEvidence(),
+    });
+    const opened = await engine.openDocument(
+      new Uint8Array(await readFile('fixtures/generated/30-wkhtmltopdf-rich-line.pdf')),
+    );
+    const analysed = await engine.analysePage(opened.documentId, 0, 0);
+    const group = analysed.textLayout.groups.find(
+      ({ text }) => text === 'this is a bold text',
+    )!;
+    const font = opened.fonts.find(({ inspection }) => inspection.weight === 400)!;
+    const run = group.styleRuns[0]!;
+
+    await expect(engine.previewRichReplacement(opened.documentId, 0, {
+      selection: {
+        lineKey: group.lineKey,
+        anchorGlyphIndex: group.glyphRange.start,
+        focusGlyphIndex: group.glyphRange.end - 1,
+      },
+      runs: [{
+        text: run.text,
+        style: run.style,
+        fontId: font.id,
+        fontIntent: 'preserve-source',
+        decorations: run.decorations,
+        sourceRunIndex: 99,
+      }],
+      allowedRegion: {
+        ...group.bounds,
+        width: group.bounds.width * 2,
+        height: group.bounds.height * 3,
+      },
+      substitutionConsents: [],
+    })).rejects.toMatchObject({ code: 'STALE_REVISION' });
+  });
+
   test('registers fonts and stages a source-backed rich candidate until validation', async () => {
     const regularBytes = new Uint8Array(await readFile(regularFontPath));
     const boldBytes = new Uint8Array(await readFile(boldFontPath));

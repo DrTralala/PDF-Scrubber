@@ -8,6 +8,7 @@ function run(
   fontId: string,
   weight: number,
   decorations = { underline: false, strikethrough: false },
+  sourceRunIndex: number | null = null,
 ): EditorRichTextRun {
   const source = selectionFixture().style;
   return Object.freeze({
@@ -16,7 +17,8 @@ function run(
     fontId,
     fontIntent: 'preserve-source',
     decorations,
-  });
+    sourceRunIndex,
+  }) as EditorRichTextRun;
 }
 
 describe('RichTextBuffer', () => {
@@ -34,6 +36,35 @@ describe('RichTextBuffer', () => {
       ['abc', 400],
       ['B!', 700],
       ['def', 400],
+    ]);
+  });
+
+  test('preserves the source run when appending text at the end', () => {
+    const buffer = RichTextBuffer.fromRuns([
+      run('Seller: ', 'regular', 400, undefined, 0),
+      run('BroadLink Official Store', 'regular', 400, undefined, 1),
+    ]);
+
+    const edited = buffer.replace(
+      { start: buffer.text.length, end: buffer.text.length },
+      ' Preferred',
+    );
+
+    expect(edited.runs.map(({ text, sourceRunIndex }) => [text, sourceRunIndex])).toEqual([
+      ['Seller: ', 0],
+      ['BroadLink Official Store Preferred', 1],
+    ]);
+  });
+
+  test('does not merge equal presentation from different source runs', () => {
+    const buffer = RichTextBuffer.fromRuns([
+      run('A', 'regular', 400, undefined, 0),
+      run('B', 'regular', 400, undefined, 1),
+    ]);
+
+    expect(buffer.runs.map(({ text, sourceRunIndex }) => [text, sourceRunIndex])).toEqual([
+      ['A', 0],
+      ['B', 1],
     ]);
   });
 

@@ -339,6 +339,19 @@ it('fits an overflowing line to the measured width and clamps at the safe maximu
     .toHaveProperty('disabled', true);
 });
 
+it('automatically requests a safe horizontal width for rich overflow', () => {
+  const controller = readyController(richEditorSnapshot({
+    requiredWidth: 54,
+    allowedWidth: 36,
+    maxAllowedWidth: 72,
+    fits: false,
+  }));
+
+  render(<ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />);
+
+  expect(controller.setRichAllowedWidth).toHaveBeenCalledWith(54);
+});
+
 it('does not offer Fit line without a measured overflow', () => {
   const controller = readyController(richEditorSnapshot({
     requiredWidth: 30,
@@ -376,6 +389,7 @@ it.each([
 
   expect(screen.queryByRole('button', { name: 'Fit line' })).toBeNull();
   expect(screen.getByText('Automatic fitting is unavailable for rotated text.')).toBeTruthy();
+  expect(controller.setRichAllowedWidth).not.toHaveBeenCalled();
   expect(screen.getByRole('button', { name: 'Apply replacement' }))
     .toHaveProperty('disabled', true);
 });

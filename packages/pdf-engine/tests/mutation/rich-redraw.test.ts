@@ -310,6 +310,45 @@ describe('rich selection redraw', () => {
     });
   }, 20_000);
 
+  test('applies source spacing calibration to shaped advances', async () => {
+    const store = await spacingFixtureStore();
+    const input = await spacingInput(store, 0);
+    const calibrated = Object.freeze({
+      ...input,
+      runs: Object.freeze(input.runs.map((run) => Object.freeze({
+        ...run,
+        sourceSpacingScale: 1.5,
+      }))),
+    });
+
+    const normal = await previewRichReplacement(store, input);
+    const adjusted = await previewRichReplacement(store, calibrated);
+
+    expect(adjusted.replacementBounds.width).toBeGreaterThan(
+      normal.replacementBounds.width,
+    );
+    expect(adjusted.commandHash).not.toBe(normal.commandHash);
+  });
+
+  test('uses source glyph advance profiles for existing run positions', async () => {
+    const store = await spacingFixtureStore();
+    const input = await spacingInput(store, 0);
+    const profiled = Object.freeze({
+      ...input,
+      runs: Object.freeze(input.runs.map((run) => Object.freeze({
+        ...run,
+        sourceAdvanceProfile: Object.freeze(run.shapedRun.glyphs.map(() => 20)),
+      }))),
+    });
+
+    const normal = await previewRichReplacement(store, input);
+    const adjusted = await previewRichReplacement(store, profiled);
+
+    expect(adjusted.replacementBounds.width).toBeGreaterThan(
+      normal.replacementBounds.width,
+    );
+  });
+
   test('replaces a previously controlled rich selection as one mutation unit', async () => {
     const original = await fixtureStore();
     const first = await applyRichReplacement(

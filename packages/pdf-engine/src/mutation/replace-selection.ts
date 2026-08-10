@@ -91,10 +91,22 @@ async function richCommandHash(input: RichReplacementMutationInput): Promise<str
       kind,
       address: graphic.address,
     })),
-    runs: input.runs.map(({ text, style, shapedRun, fontAsset, decorations }) => ({
+    runs: input.runs.map(({
+      text,
+      style,
+      shapedRun,
+      fontAsset,
+      decorations,
+      sourceRunIndex,
+      sourceSpacingScale,
+      sourceAdvanceProfile,
+    }) => ({
       text,
       style,
       decorations,
+      sourceRunIndex: sourceRunIndex ?? null,
+      sourceSpacingScale: sourceSpacingScale ?? 1,
+      sourceAdvanceProfile: sourceAdvanceProfile ?? null,
       direction: shapedRun.direction,
       glyphs: shapedRun.glyphs,
       font: {

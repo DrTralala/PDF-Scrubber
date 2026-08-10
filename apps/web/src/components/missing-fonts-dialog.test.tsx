@@ -84,8 +84,10 @@ it('registers any selected supported face for the tab without claiming PDF chang
 
   registration.resolve(fakeFontDescriptor('upload', 'different-face.ttf'));
   expect(await screen.findByText(
-    'Example Regular registered for this tab. The source PDF was not changed.',
+    'Imported Example Regular successfully',
   )).toBeTruthy();
+  expect(screen.getByText('Imported Example Regular successfully')
+    .classList.contains('font-import-success')).toBe(true);
   expect(sourceFace.isConnected).toBe(true);
   expect(otherFace.isConnected).toBe(true);
 });
@@ -120,7 +122,7 @@ it('keeps import state per row, accepts supported formats, and resets the input'
 
   registration.resolve(fakeFontDescriptor('upload', 'face.ttf'));
   await screen.findByText(
-    'Example Regular registered for this tab. The source PDF was not changed.',
+    'Imported Example Regular successfully',
   );
 });
 
@@ -187,9 +189,10 @@ it('uses controlled copy for an unknown registration failure and re-enables cont
     new File([Uint8Array.of(1)], 'unknown.ttf', { type: 'font/ttf' }),
   );
 
-  expect(await screen.findByText(
+  const errorMessage = await screen.findByText(
     'The font could not be registered. Upload a supported font file or choose another local font.',
-  )).toBeTruthy();
+  );
+  expect(errorMessage.classList.contains('font-import-success')).toBe(false);
   expect(screen.getByRole('button', { name: 'Import Unknown Failure Face' }))
     .toHaveProperty('disabled', false);
   expect(input).toHaveProperty('disabled', false);

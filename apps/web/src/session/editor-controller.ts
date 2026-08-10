@@ -682,12 +682,13 @@ export class EditorController {
     line: NonNullable<EditorSnapshot['analysis']>['textLayout']['lines'][number],
     pageSpace: NonNullable<EditorSnapshot['analysis']>['pageSpace'],
   ): EditorRichState {
-    const unresolved = selection.styleRuns.map((run): EditorRichTextRun => Object.freeze({
+    const unresolved = selection.styleRuns.map((run, sourceRunIndex): EditorRichTextRun => Object.freeze({
       text: run.text,
       style: run.style,
       fontId: '',
       fontIntent: 'preserve-source',
       decorations: run.decorations,
+      sourceRunIndex,
     }));
     const resolved = this.#resolveRichRuns(unresolved, this.#state.fonts);
     const allowedRegion = deriveRichFitRegion(
@@ -829,6 +830,7 @@ export class EditorController {
           ...run,
           style: Object.freeze({ ...run.style }),
           decorations: Object.freeze({ ...run.decorations }),
+          sourceRunIndex: run.sourceRunIndex ?? null,
         }))),
       allowedRegion: Object.freeze({ ...richEditor.allowedRegion }),
       substitutionConsents: Object.freeze([...richEditor.substitutionConsents]),

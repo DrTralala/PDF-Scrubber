@@ -800,6 +800,10 @@ button:disabled {
   font-size: 0.78rem;
 }
 
+.font-import-success {
+  color: var(--safe) !important;
+}
+
 .missing-font-actions {
   display: flex;
   gap: 0.45rem;

@@ -41,6 +41,9 @@ export type ResolvedRichTextRun = Readonly<{
   shapedRun: ShapedRun;
   fontAsset: ResolvedFontAsset;
   decorations: TextDecorations;
+  sourceRunIndex?: number | null;
+  sourceSpacingScale?: number;
+  sourceAdvanceProfile?: readonly number[];
 }>;
 
 export type ControlledRichRedrawResult = Readonly<{
@@ -284,6 +287,10 @@ function layoutRichRuns(
   const decorations: RichDecorationGeometry[] = [];
   const positions = runs.map((run, runIndex) => {
     const { style, shapedRun, fontAsset } = run;
+    const sourceSpacingScale = run.sourceSpacingScale ?? 1;
+    if (!(sourceSpacingScale > 0) || !Number.isFinite(sourceSpacingScale)) {
+      throw new MutationError('MALFORMED_INPUT', 'Rich replacement spacing scale is invalid');
+    }
     if (
       !(style.fontSize > 0) || !(style.horizontalScaling > 0) ||
       style.renderingMode < 0 || style.renderingMode > 3
@@ -292,14 +299,19 @@ function layoutRichRuns(
     }
     const runStart = Object.freeze([cursorX, cursorY] as const);
     const characters = [...run.text.normalize('NFC')];
-    const positioned = Object.freeze(shapedRun.glyphs.map((glyph) => {
+    const positioned = Object.freeze(shapedRun.glyphs.map((glyph, glyphIndex) => {
       const x = cursorX + glyph.xOffset / shapedRun.unitsPerEm *
         style.fontSize * style.horizontalScaling;
       const y = cursorY + glyph.yOffset / shapedRun.unitsPerEm * style.fontSize;
       const matrix = multiply(anchor.pdfMatrix, Object.freeze([1, 0, 0, 1, x, y]));
       const inspection = fontAsset.descriptor.inspection;
-      const glyphAdvance = glyph.xAdvance / shapedRun.unitsPerEm *
-        style.fontSize * style.horizontalScaling;
+      const shapedGlyphAdvance = glyph.xAdvance / shapedRun.unitsPerEm *
+        style.fontSize * style.horizontalScaling * sourceSpacingScale;
+      const profiledAdvance = run.sourceAdvanceProfile?.[glyphIndex];
+      const glyphAdvance = profiledAdvance !== undefined &&
+        Number.isFinite(profiledAdvance) && profiledAdvance > 0
+        ? profiledAdvance
+        : shapedGlyphAdvance;
       const left = Math.min(x, x + glyphAdvance);
       const right = Math.max(x, x + glyphAdvance);
       const bottom = y + inspection.descent / inspection.unitsPerEm * style.fontSize + style.rise;
@@ -312,11 +324,14 @@ function layoutRichRuns(
       ]);
       glyphBounds.push(bounds);
       const character = characters[glyph.cluster] ?? '';
-      cursorX += (
-        glyph.xAdvance / shapedRun.unitsPerEm * style.fontSize +
-        style.characterSpacing +
-        (character === ' ' ? style.wordSpacing : 0)
-      ) * style.horizontalScaling;
+      cursorX += profiledAdvance !== undefined &&
+        Number.isFinite(profiledAdvance) && profiledAdvance > 0
+        ? profiledAdvance
+        : (
+          glyph.xAdvance / shapedRun.unitsPerEm * style.fontSize +
+          style.characterSpacing +
+          (character === ' ' ? style.wordSpacing : 0)
+        ) * style.horizontalScaling * sourceSpacingScale;
       cursorY += glyph.yAdvance / shapedRun.unitsPerEm * style.fontSize;
       return Object.freeze({ matrix, bounds });
     }));

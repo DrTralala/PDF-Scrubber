@@ -20,8 +20,9 @@ export function missingFontDownloadUrl(name: string): string {
   return url.toString();
 }
 
-type RowState = Readonly<{ busy: boolean; message: string }>;
-const EMPTY_ROW: RowState = Object.freeze({ busy: false, message: '' });
+type RowTone = 'neutral' | 'success' | 'error';
+type RowState = Readonly<{ busy: boolean; message: string; tone: RowTone }>;
+const EMPTY_ROW: RowState = Object.freeze({ busy: false, message: '', tone: 'neutral' });
 const EDITING_FONT_REASON_COPY: Readonly<Record<DocumentEditingFontReason, string>> = Object.freeze({
   'not-embedded': 'This font is not embedded in the PDF.',
   'embedded-not-reusable': 'Embedded for display, but PDF-Scrubber cannot reuse it for editing.',
@@ -55,7 +56,11 @@ export function MissingFontsDialog({
   };
 
   const importFont = async (missingName: string, file: File): Promise<void> => {
-    setRow(missingName, { busy: true, message: 'Registering and checking font…' });
+    setRow(missingName, {
+      busy: true,
+      message: 'Registering and checking font…',
+      tone: 'neutral',
+    });
     let bytes: Uint8Array;
     try {
       bytes = new Uint8Array(await file.arrayBuffer());
@@ -63,6 +68,7 @@ export function MissingFontsDialog({
       setRow(missingName, {
         busy: false,
         message: 'The selected font file could not be read.',
+        tone: 'error',
       });
       return;
     }
@@ -74,12 +80,14 @@ export function MissingFontsDialog({
         ?? 'Font';
       setRow(missingName, {
         busy: false,
-        message: `${registeredName} registered for this tab. The source PDF was not changed.`,
+        message: `Imported ${registeredName} successfully`,
+        tone: 'success',
       });
     } catch (error) {
       setRow(missingName, {
         busy: false,
         message: fontRegistrationErrorMessage(error),
+        tone: 'error',
       });
     }
   };
@@ -146,7 +154,14 @@ export function MissingFontsDialog({
                   >Download</a>
                 </div>
                 <p>{EDITING_FONT_REASON_COPY[font.reason]}</p>
-                <p aria-live="polite">{row.message}</p>
+                <p
+                  className={row.tone === 'success'
+                    ? 'font-import-success'
+                    : row.tone === 'error' ? 'font-import-error' : undefined}
+                  aria-live="polite"
+                >
+                  {row.message}
+                </p>
               </li>
             );
           })}

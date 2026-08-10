@@ -50,6 +50,12 @@ import {
   type SelectionMutationPreconditions,
 } from './mutation/excise';
 import type { ResolvedRichTextRun } from './mutation/redraw';
+import {
+  sourceRunAdvanceProfile,
+  shapedRunAdvance,
+  sourceRunExtent,
+  sourceSpacingScale,
+} from './mutation/source-spacing';
 import { ObjectStore } from './pdf/object-store';
 import {
   validateCandidateAgainstSource,
@@ -92,6 +98,7 @@ export type SessionRichTextRunInput = Readonly<{
   fontId: string;
   fontIntent: RichFontIntent;
   decorations: TextDecorations;
+  sourceRunIndex?: number | null;
 }>;
 
 export type SessionRichReplacementPayload = Readonly<{
@@ -215,6 +222,44 @@ function intersects(left: AnalysedSpan['bounds'], right: AnalysedSpan['bounds'])
     && left.x + left.width > right.x
     && left.y < right.y + right.height
     && left.y + left.height > right.y;
+}
+
+type AnalysedLineGlyph = AnalysedTextLine['glyphs'][number];
+
+function sameObjectReference(
+  left: Readonly<{ objectNumber: number; generationNumber: number }>,
+  right: Readonly<{ objectNumber: number; generationNumber: number }>,
+): boolean {
+  return left.objectNumber === right.objectNumber &&
+    left.generationNumber === right.generationNumber;
+}
+
+function sameStreamPath(
+  left: AnalysedSpan['address']['streamPath'],
+  right: AnalysedSpan['address']['streamPath'],
+): boolean {
+  return left.length === right.length && left.every((segment, index) => {
+    const candidate = right[index];
+    return candidate !== undefined &&
+      segment.kind === candidate.kind &&
+      segment.resourceName === candidate.resourceName &&
+      sameObjectReference(segment.ref, candidate.ref);
+  });
+}
+
+function sourceSpanForGlyph(
+  session: Session,
+  glyph: AnalysedLineGlyph,
+): AnalysedSpan | null {
+  for (const span of session.spans.values()) {
+    if (
+      sameObjectReference(span.address.pageRef, glyph.source.pageRef) &&
+      sameStreamPath(span.address.streamPath, glyph.source.streamPath) &&
+      glyph.source.operatorIndex >= span.address.operatorRange.start &&
+      glyph.source.operatorIndex < span.address.operatorRange.end
+    ) return span;
+  }
+  return null;
 }
 
 function copyAsset(asset: SubstituteFontAsset): SubstituteFontAsset {
@@ -750,9 +795,21 @@ export class PdfEngineSessions {
       : Object.freeze({
           slices: supplied.slices,
           decorations: supplied.decorations,
-        });
+    });
     const runs: ResolvedRichTextRun[] = [];
     for (const run of payload.runs) {
+      const sourceRunIndex = run.sourceRunIndex ?? null;
+      let sourceRun: (typeof selection.styleRuns)[number] | null = null;
+      if (sourceRunIndex !== null) {
+        const resolvedSourceRun = selection.styleRuns[sourceRunIndex];
+        if (resolvedSourceRun === undefined) {
+          throw new SessionError(
+            'STALE_REVISION',
+            'Rich replacement source run no longer resolves',
+          );
+        }
+        sourceRun = resolvedSourceRun;
+      }
       const descriptor = this.#fonts.list().find(({ id }) => id === run.fontId);
       if (descriptor === undefined) {
         throw new SessionError('FONT_UNAVAILABLE', `Font ${run.fontId} is not registered`);
@@ -784,13 +841,57 @@ export class PdfEngineSessions {
         matchKind = resolution.kind;
       }
       const bytes = this.#fonts.getBytes(descriptor.id);
+      const shapedRun = await shapeText({ fontBytes: bytes, text: run.text });
+      let spacingScale = 1;
+      let advanceProfile: readonly number[] | null = null;
+      if (sourceRun !== null) {
+        const sourceGlyph = line.glyphs[sourceRun.glyphRange.start];
+        const sourceSpan = sourceGlyph === undefined
+          ? null
+          : sourceSpanForGlyph(session, sourceGlyph);
+        if (sourceGlyph !== undefined && sourceSpan !== null) {
+          try {
+            const shapedSourceRun = await shapeText({
+              fontBytes: bytes,
+              text: sourceRun.text,
+            });
+            spacingScale = sourceSpacingScale({
+              sourceExtent: sourceRunExtent(line, sourceRun),
+              baselineScale: Math.hypot(
+                sourceSpan.renderMatrix[0],
+                sourceSpan.renderMatrix[1],
+              ),
+              shapedAdvance: shapedRunAdvance(
+                sourceRun.text,
+                shapedSourceRun,
+                sourceRun.style,
+              ),
+            });
+            const profile = sourceRunAdvanceProfile(
+              line,
+              sourceRun,
+              Math.hypot(sourceSpan.renderMatrix[0], sourceSpan.renderMatrix[1]),
+              shapedSourceRun.glyphs.length,
+            );
+            advanceProfile = run.text === sourceRun.text || run.text.startsWith(sourceRun.text)
+              ? profile
+              : null;
+          } catch {
+            spacingScale = 1;
+            advanceProfile = null;
+          }
+        }
+      }
       const fontAsset: ResolvedFontAsset = Object.freeze({ descriptor, bytes, matchKind });
       runs.push(Object.freeze({
         text: run.text,
         style: Object.freeze({ ...run.style }),
-        shapedRun: await shapeText({ fontBytes: bytes, text: run.text }),
+        shapedRun,
         fontAsset,
         decorations: Object.freeze({ ...run.decorations }),
+        sourceRunIndex,
+        sourceSpacingScale: spacingScale,
+        ...(advanceProfile === null ? {} : { sourceAdvanceProfile: advanceProfile }),
       }));
     }
     return Object.freeze({

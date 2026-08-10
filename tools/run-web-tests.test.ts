@@ -83,7 +83,7 @@ describe('web test wrapper', () => {
     expect(call[1].slice(1)).toEqual(forwardedArguments);
     expect(call[1][0]).toMatch(/node_modules[\\/]@playwright[\\/]test[\\/]cli\.js$/);
     expect(call[2]).toMatchObject({
-      cwd: expect.stringMatching(/pdf-editor$/),
+      cwd: process.cwd(),
       env: ENVIRONMENT,
       stdio: 'inherit',
     });

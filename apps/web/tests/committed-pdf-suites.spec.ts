@@ -80,10 +80,9 @@ async function importRequiredFaces(
     await expect(row).toHaveCount(1);
     await row.getByLabel(`Choose font file for ${name}`, { exact: true })
       .setInputFiles(resolveCommittedFontPath(font));
-    await expect(row.getByText(
-      `${name} registered for this tab. The source PDF was not changed.`,
-      { exact: true },
-    )).toBeVisible();
+    const success = row.getByText(`Imported ${name} successfully`, { exact: true });
+    await expect(success).toBeVisible();
+    await expect(success).toHaveClass(/font-import-success/);
     await assertFontInventoryRows(page, loaded);
   }
 }

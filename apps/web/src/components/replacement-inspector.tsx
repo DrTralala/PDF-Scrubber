@@ -7,6 +7,7 @@ import {
 } from '../model/editor-state';
 import type { EditorController } from '../session/editor-controller';
 import { deriveLocalFontRequirement } from '../fonts/local-font-matching';
+import { autoFitRichWidth } from '../editing/rich-auto-fit';
 import { FitStatus, isLeftToRightHorizontalBaseline } from './fit-status';
 import { FontRequirementPanel } from './font-requirement-panel';
 import { FontUploadControl } from './font-upload-control';
@@ -33,6 +34,29 @@ export function ReplacementInspector({
   }, [selectedTextKey]);
 
   const selection = snapshot.selection;
+  const selectedLine = selection?.kind === 'text'
+    ? (snapshot.analysis?.textLayout.lines ?? []).find(
+        ({ key }) => key === selection.textSelection.lineKey,
+      )
+    : undefined;
+  const fitLineEligible = selectedLine !== undefined &&
+    isLeftToRightHorizontalBaseline(selectedLine.baselineDirection);
+  const richPreview = selection?.kind === 'text'
+    ? snapshot.richEditor?.preview ?? null
+    : null;
+  const allowedRegion = snapshot.richEditor?.allowedRegion ?? null;
+  const maxAllowedWidth = snapshot.richEditor?.maxAllowedWidth ?? 0;
+  useEffect(() => {
+    if (richPreview === null || allowedRegion === null) return;
+    const nextWidth = autoFitRichWidth({
+      requiredBounds: richPreview.replacementBounds,
+      allowedRegion,
+      maxAllowedWidth,
+      fitLineEligible,
+    });
+    if (nextWidth !== null) controller.setRichAllowedWidth(nextWidth);
+  }, [allowedRegion, controller, fitLineEligible, maxAllowedWidth, richPreview]);
+
   if (selection === null) {
     return (
       <div className="inspector-empty">
@@ -76,11 +100,6 @@ export function ReplacementInspector({
       range: Object.freeze({ ...editorRange }),
     });
     const preview = richEditor.preview;
-    const selectedLine = snapshot.analysis?.textLayout.lines.find(
-      ({ key }) => key === textSelection.lineKey,
-    );
-    const fitLineEligible = selectedLine !== undefined &&
-      isLeftToRightHorizontalBaseline(selectedLine.baselineDirection);
     const canApply = preview !== null
       && preview.fits
       && preview.requiredSubstitutionConsents.length === 0

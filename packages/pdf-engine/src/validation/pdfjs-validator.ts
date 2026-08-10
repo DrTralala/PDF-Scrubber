@@ -392,10 +392,13 @@ function extractionEvidence(
   const oldText = searchable(expectation.oldText);
   const newText = searchable(expectation.newText);
   const oldTextOutsideTargetCount = countOccurrences(outsideText, oldText);
+  const oldTextContainedByNewText = oldText.length > 0 && newText.includes(oldText);
   return Object.freeze({
     items,
     targetText,
-    oldTextAbsentAtTarget: oldText.length === 0 || !targetText.includes(oldText),
+    oldTextAbsentAtTarget: oldText.length === 0 || oldTextContainedByNewText
+      ? oldText.length === 0 || targetText === newText
+      : !targetText.includes(oldText),
     newTextPresentAtTarget: newText.length === 0 || targetText.includes(newText),
     oldTextOutsideTargetCount,
     outsideTextPreserved: oldTextOutsideTargetCount === expectation.expectedOldTextOutsideTarget,

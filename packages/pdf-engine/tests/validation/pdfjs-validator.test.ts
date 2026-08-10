@@ -123,6 +123,27 @@ describe('PDF.js runtime validation', () => {
     expect(evidence.extraction.newTextPresentAtTarget).toBe(true);
   }, 15_000);
 
+  test('accepts an append when the old text is contained in the new text', async () => {
+    const replacement = await createReplacementFixture('Target 01 Preferred');
+    const expectation = {
+      ...(await sourceAwareExpectation(replacement)),
+      authorisedBounds: {
+        ...replacement.targetBounds,
+        width: replacement.targetBounds.width * 2,
+      },
+    };
+
+    const evidence = await validateCandidateAgainstSource(
+      replacement.originalBytes,
+      replacement.candidateBytes,
+      expectation,
+      nodeCanvasFactory,
+    );
+
+    expect(evidence.valid).toBe(true);
+    expect(evidence.extraction.newTextPresentAtTarget).toBe(true);
+  }, 20_000);
+
   test('accepts a candidate only when source text, pixels, structure, and fonts are preserved outside the authorised edit', async () => {
     const replacement = await createReplacementFixture('E 01');
     const expectation = await sourceAwareExpectation(replacement);

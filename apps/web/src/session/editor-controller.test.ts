@@ -250,7 +250,11 @@ describe('EditorController', () => {
     });
     expect(h.engines[0]!.richPreviewInputs[0]).toMatchObject({
       selection: { lineKey: 'line-1', anchorGlyphIndex: 0, focusGlyphIndex: 2 },
-      runs: [{ text: 'AXC', fontId: 'font:bundled-example' }],
+      runs: [{
+        text: 'AXC',
+        fontId: 'font:bundled-example',
+        sourceRunIndex: 0,
+      }],
     });
 
     h.controller.setRichSubstitutionConsent('font:bundled-example', true);

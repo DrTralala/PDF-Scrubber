@@ -13,7 +13,7 @@
     "@fontsource/noto-sans": "5.3.0",
     "@pdf-editor/pdf-engine": "*",
     "@pdf-editor/worker-protocol": "*",
-    "pdfjs-dist": "6.1.200",
+    "pdfjs-dist": "6.2.108",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
