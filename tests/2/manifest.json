@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 1,
+  "suite": 2,
+  "pdf": "document.pdf",
+  "sha256": "e7a9c24e008bd97ac1148e8e4946d6935bcee9019e7291dafc69ce697d3115ea",
+  "byteLength": 1712688,
+  "generation": {
+    "synthetic": true,
+    "oneTime": true,
+    "seed": "pdf-scrubber-committed-pdf-suites-v1",
+    "runtime": "Node.js 24.18.0",
+    "libraries": {
+      "pdf-lib": "1.17.1",
+      "@pdf-lib/fontkit": "1.1.1",
+      "pngjs": "7.0.0"
+    },
+    "createdOn": "2026-08-06"
+  },
+  "sizePolicy": {
+    "minimumBytes": 1,
+    "maximumBytes": 5242879
+  },
+  "languages": [
+    "zh-Hans"
+  ],
+  "fonts": [
+    {
+      "inventoryName": "M+ 1c regular",
+      "reason": "embedded-not-reusable",
+      "weight": 400,
+      "italic": false,
+      "source": {
+        "kind": "committed",
+        "path": "tests/fonts/mplus-1c-regular.ttf",
+        "version": "1.047",
+        "sha256": "4e37946cb7290be6ecf0af041b76353d1654a8f98b22ced2d6304b136abc3ec8"
+      },
+      "licence": "M+ permissive font licence",
+      "fonts2uPage": "https://fonts2u.com/m-1c-regular.font",
+      "searchUrl": "https://fonts2u.com/search.html?q=M%2B+1c+regular"
+    }
+  ],
+  "edits": [
+    {
+      "language": "zh-Hans",
+      "pageIndex": 0,
+      "sourceText": "文件：等待中",
+      "replacementText": "文件：已完成",
+      "fontInventoryName": "M+ 1c regular",
+      "verifyAfterReopen": true
+    }
+  ],
+  "contentAssertions": [
+    "文件：等待中",
+    "保存成功。",
+    "操作成功。"
+  ]
+}

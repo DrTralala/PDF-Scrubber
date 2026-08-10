@@ -1,0 +1,70 @@
+# PDF-Scrubber
+
+PDF-Scrubber edits supported machine-readable PDF text locally in the browser. It groups compatible left-to-right glyphs into editable fields and visual lines, preserves mixed style runs and recognised text decorations, and validates every candidate before enabling download. The first release replaces existing text only; it does not add text/images, edit scans, reflow paragraphs, or provide undo.
+
+## Supported editing
+
+- Machine-readable left-to-right text with resolvable source glyphs can be selected as an inferred field, a visual line, or a source-backed range within one line. Finite rotated and sheared text is supported; vertical writing remains read-only.
+- Unchanged text retains its analysed font size, weight, italic angle, colour, spacing, scaling, rise, rendering mode, and high-confidence underline/strikethrough state. Replacement text inherits the style at the replaced range; the inspector can override font, size, bold, italic, underline, strikethrough, colour, spacing, and horizontal scale.
+- PDF-Scrubber uses bundled regular and bold Noto Sans fallbacks. Uploading a supported font registers and applies it to the captured text range. Where the browser exposes Local Font Access, `Enable local fonts` explicitly requests permission and caches authorised metadata for the tab; font bytes remain in memory and are embedded into the edited PDF.
+- Edited-document embedding rights are enforced. Single-face static TTF, static CFF/OTF, and WOFF1 inputs are supported; WOFF2, font collections, variable fonts, colour fonts, and fonts that prohibit edited-document embedding are rejected.
+- Simple solid source underlines and strikethroughs are recognised only when geometry, colour, thickness, ownership, and source addresses are unambiguous. Tables, separators, shared graphics, and custom/double/dashed/wavy lines are preserved with a warning rather than removed.
+- Bidirectional, vertical-writing, clipping-mode, shared-resource, outlined, scanned, malformed, and otherwise unsafe text remains read-only with a reason. Line wrapping, paragraph reflow, and cross-line selection are outside this release.
+- Fit is measured from shaped glyphs before mutation. The allowed region may expand only up to the next protected glyph or page edge; overflow is rejected.
+- Candidate export requires independent source/candidate text, pixel, page-geometry, content-stream, controlled-redraw, and embedded-font validation.
+
+## Requirements
+
+- System-managed Node.js 24.18.0
+- npm 11.16.0
+
+## Run from WSL
+
+```bash
+npm ci
+npm start
+```
+
+Open the printed `http://localhost:5173/` URL in Windows. The server also prints the WSL network URL. PDF-Scrubber accepts supported PDFs up to 15 MiB (`15,728,640` bytes) and does not upload document bytes. Independent safeguards still limit PDFs to 2,000 indirect objects, nesting depth 12, 4 MiB decoded streams, 50,000 operations per stream, 12-megapixel page images, and 30-second operations; a file below 15 MiB can therefore still stop at a named processing limit.
+
+## Checks
+
+```bash
+npm run typecheck
+npm run test:unit
+npm run test:web:unit
+npm run build:web
+npm run build:fixtures
+
+# Routine: existing browser tests plus committed Suite 1
+npm run test:web
+
+# Full: existing browser tests plus committed Suites 1–3
+npm run test:web -- --full
+
+npm run test:m0
+```
+
+Port 5173 must be free before either browser command because the Playwright suite starts its own strict-port test server. The committed PDFs are synthetic, manifest/hash verified, checked for PDF readability and metadata, and not regenerated during tests.
+
+Large public-PDF validation is opt-in because it downloads roughly 25 MiB into temporary storage:
+
+```bash
+npm run validate:large-pdfs
+```
+
+The command verifies exact sizes, SHA-256 hashes, and PDF signatures for the pinned public PDFs, runs their dedicated browser checks, and removes the downloads afterwards.
+
+## PDF compatibility and privacy
+
+Edited PDFs produced before the rebrand remain readable. New controlled-redraw and page-isolation markers use `PDF-Scrubber`; compatibility tests continue to accept the previous marker format. Document bytes and uploaded font bytes remain in the browser tab and are not sent to a server.
+
+## Project structure
+
+- `apps/web/` — React/Vite editor application and browser tests.
+- `packages/pdf-engine/` — PDF analysis, mutation, shaping, validation, and export engine.
+- `packages/worker-protocol/` — worker message types and transfer helpers.
+- `packages/test-support/` — fixture, rendering, diff, and validation helpers.
+- `fixtures/generated/` — committed synthetic PDFs used by unit and browser tests.
+- `tests/1`, `tests/2`, `tests/3` — committed multi-language PDF validation suites.
+- `tools/` — test runners, PDF inspection, fixture validation, and project policy checks.

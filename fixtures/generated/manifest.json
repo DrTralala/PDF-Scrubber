@@ -1,0 +1,626 @@
+[
+  {
+    "id": "01-simple-tj",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "tj"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 01",
+    "replacementUnicode": "Edited 01",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "08924a6a5e7b50931858b1337f82a1a14f15a25766d43f0512cf3f34e7989607"
+  },
+  {
+    "id": "02-kerned-tj-array",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "tjArray"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 02",
+    "replacementUnicode": "Edited 02",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "b2c2be5f7b598ae356938f9efbf89f3e89b5621ddc8e206eec8e4434584d7005"
+  },
+  {
+    "id": "03-single-quote",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "singleQuote"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 03",
+    "replacementUnicode": "Edited 03",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "b2de78abdee394bd95d9dbe1acdf742e0500d57cac7ac049d1f7553f8e9e2429"
+  },
+  {
+    "id": "04-double-quote",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "doubleQuote"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 04",
+    "replacementUnicode": "Edited 04",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "6967176ef55a0835a275b06812c1f9f44ad72ccc1dc5c8724632c311c780e9f6"
+  },
+  {
+    "id": "05-spacing-rise-scale",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "textState"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 05",
+    "replacementUnicode": "Edited 05",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "3e4849685a6d11c1bf3f8acafadcbf349f681e64d90b6bdc7738389aa3ff8dc4"
+  },
+  {
+    "id": "06-subset-font",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "subsetFont"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 06",
+    "replacementUnicode": "Edited 06",
+    "expected": {
+      "kind": "capability",
+      "capability": "replacementWithSubstitution"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [
+      {
+        "package": "@fontsource/noto-sans",
+        "version": "5.3.0",
+        "licence": "OFL-1.1"
+      }
+    ],
+    "sha256": "71a11be24c790773dbd2a79c27821102bac90b5c7ff668178034f536ce7af066"
+  },
+  {
+    "id": "07-ligature",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "ligature"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "office",
+    "replacementUnicode": "affinity",
+    "expected": {
+      "kind": "capability",
+      "capability": "replacementWithSubstitution"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [
+      {
+        "package": "@fontsource/noto-sans",
+        "version": "5.3.0",
+        "licence": "OFL-1.1"
+      }
+    ],
+    "sha256": "52bd430240c2868e0493cfe180920c5b83fe2df841244df361630b61cd5df9ee"
+  },
+  {
+    "id": "08-combining-marks",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "combiningMarks"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Café 08",
+    "replacementUnicode": "Résumé 08",
+    "expected": {
+      "kind": "capability",
+      "capability": "replacementWithSubstitution"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [
+      {
+        "package": "@fontsource/noto-sans",
+        "version": "5.3.0",
+        "licence": "OFL-1.1"
+      }
+    ],
+    "sha256": "50536bd705426aafeec303566dfaf7e5ecd25980f330df37aa36668f0452407f"
+  },
+  {
+    "id": "09-bidirectional",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "bidirectional"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "العربية ٠٩",
+    "replacementUnicode": "إيصال ٠٩",
+    "expected": {
+      "kind": "capability",
+      "capability": "replacementWithSubstitution"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [
+      {
+        "package": "@fontsource/noto-sans-arabic",
+        "version": "5.3.0",
+        "licence": "OFL-1.1"
+      }
+    ],
+    "sha256": "2e0fc80e5628ae82ac44f9fc2d5d43ed8882b593458c5c079604d9922c66be27"
+  },
+  {
+    "id": "10-vertical-writing",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "verticalWriting"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Vertical 10",
+    "replacementUnicode": "Edited 10",
+    "expected": {
+      "kind": "capability",
+      "capability": "readOnly",
+      "reason": "unsupportedEncoding"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [
+      {
+        "package": "@fontsource/noto-sans",
+        "version": "5.3.0",
+        "licence": "OFL-1.1"
+      }
+    ],
+    "sha256": "8bf444aa07fb0d98934bf4ff95766f740abd9f522858aeef0b666b793b805066"
+  },
+  {
+    "id": "11-rotate-90",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "rotation"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 11",
+    "replacementUnicode": "Edited 11",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "60bf4ccb2bd0209a7f940bae09936260b3e8579f937a0b5264ab60f93173b702"
+  },
+  {
+    "id": "12-rotate-180",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "rotation"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 12",
+    "replacementUnicode": "Edited 12",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "ba5492e90dbd5eea61b2f475db1cf9587d094234a07b3c77e14aa9eb5c279fa2"
+  },
+  {
+    "id": "13-rotate-270",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "rotation"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 13",
+    "replacementUnicode": "Edited 13",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "c2c4515d1712bf0997f96360865f4e4cce71f5e560407b463051ea0ea574c961"
+  },
+  {
+    "id": "14-crop-nonzero-origin",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "cropBox"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 14",
+    "replacementUnicode": "Edited 14",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "e72b807e377a54e3bbbca069476c978bc93cd0e9817999cb9f2c933383bc536c"
+  },
+  {
+    "id": "15-user-unit",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "userUnit"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 15",
+    "replacementUnicode": "Edited 15",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "e79eb1ecc7d5762dac9275a59b1cf33c1ad7ff8e34c64ec0777fff6cf8e0f048"
+  },
+  {
+    "id": "16-form-xobject",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "formXObject"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 16",
+    "replacementUnicode": "Edited 16",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "f052970e678fe01947600b7f0d07698f88e91e37a60e39445236022cffc7a62f"
+  },
+  {
+    "id": "17-nested-form-xobject",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "nestedFormXObject"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 17",
+    "replacementUnicode": "Edited 17",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "94b9250ddacc1524ab97cbde8693a614525a541a21766caf545527f167f20715"
+  },
+  {
+    "id": "18-shared-form-xobject",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "sharedFormXObject"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 18",
+    "replacementUnicode": "Edited 18",
+    "expected": {
+      "kind": "capability",
+      "capability": "readOnly",
+      "reason": "sharedResource"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "91a5667612cb649d21f46b42724d58ff01a5371dc0fdcde981fc27ec5716892a"
+  },
+  {
+    "id": "19-custom-encoding",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "customEncoding"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 19",
+    "replacementUnicode": "Edited 19",
+    "expected": {
+      "kind": "capability",
+      "capability": "replacementWithSubstitution"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "1ac316e50bc01c785a155625cc325c71a41a8746a269afd7a16751bdbdd8f6f4"
+  },
+  {
+    "id": "20-missing-tounicode",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "missingToUnicode"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 20",
+    "replacementUnicode": "Edited 20",
+    "expected": {
+      "kind": "capability",
+      "capability": "replacementWithSubstitution"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "03c20b9982eec61438a7400860845ce2a7a32c63b6d17d88431ba3f5b75b43ad"
+  },
+  {
+    "id": "21-incorrect-tounicode",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "incorrectToUnicode"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 21",
+    "replacementUnicode": "Edited 21",
+    "expected": {
+      "kind": "capability",
+      "capability": "replacementWithSubstitution"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "1d363f49e2aad0ed9d61a57088878e72646820189af008b2972143d9e84ee6fa"
+  },
+  {
+    "id": "22-tagged-pdfua-marker",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "pdfUaMarker"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 22",
+    "replacementUnicode": "Edited 22",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [
+      "PDF_UA"
+    ],
+    "assets": [],
+    "sha256": "0f0e10cfd06ab56f84574271f34b567b77bae83949ed5f6f976e712407c7ae90"
+  },
+  {
+    "id": "23-pdfa-marker",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "pdfAMarker"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 23",
+    "replacementUnicode": "Edited 23",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [
+      "PDF_A"
+    ],
+    "assets": [],
+    "sha256": "53e4b74e73b14a20cca2ed3457fca0705db1824a8478f57504bdff7af736c9b3"
+  },
+  {
+    "id": "24-signature-marker",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "signatureMarker"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 24",
+    "replacementUnicode": "Edited 24",
+    "expected": {
+      "kind": "capability",
+      "capability": "safeReplacement"
+    },
+    "expectedDisclosureCodes": [
+      "SIGNATURE"
+    ],
+    "assets": [],
+    "sha256": "ee5b535a333603c900f2d6aea1cd84519b48fb8ab7d052e7a458f96215fae7db"
+  },
+  {
+    "id": "25-encryption-marker",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "encryptionMarker"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 25",
+    "replacementUnicode": "Edited 25",
+    "expected": {
+      "kind": "rejected",
+      "error": "UNSUPPORTED_DOCUMENT"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "dd7e743e91fe90c348289b159af8259098449ebc903ac653ed617ddf488915e7"
+  },
+  {
+    "id": "26-malformed-stream",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "malformedStream"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 26",
+    "replacementUnicode": "Edited 26",
+    "expected": {
+      "kind": "rejected",
+      "error": "MALFORMED_INPUT"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "f69e25adb78f166f256c5b83573c8064e1d5dfc29b5da13cebab1beee667d04b"
+  },
+  {
+    "id": "27-decompression-abuse",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "decompressionAbuse"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 27",
+    "replacementUnicode": "Edited 27",
+    "expected": {
+      "kind": "rejected",
+      "error": "RESOURCE_LIMIT"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "d264078c312042add647383b440d203e5787953062096a3d698bf10fbe9710c3"
+  },
+  {
+    "id": "28-added-text-control",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "addedTextControl"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 28",
+    "replacementUnicode": "Edited 28",
+    "expected": {
+      "kind": "crossConsumerControl"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [
+      {
+        "package": "@fontsource/noto-sans",
+        "version": "5.3.0",
+        "licence": "OFL-1.1"
+      }
+    ],
+    "sha256": "fc6a27d305886de7dffde788daba4e2164e0dae186aee2451e856e2bd39be89d"
+  },
+  {
+    "id": "29-added-image-control",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "addedImageControl"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Target 29",
+    "replacementUnicode": "Edited 29",
+    "expected": {
+      "kind": "crossConsumerControl"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [],
+    "sha256": "b5d0728f5f296691b79d0d7128858ea7745dec85f8b3426a3c8cd491699b20fd"
+  },
+  {
+    "id": "30-wkhtmltopdf-rich-line",
+    "source": "synthetic",
+    "generatorVersion": 1,
+    "classes": [
+      "wkhtmltopdfRichLine"
+    ],
+    "targetPage": 0,
+    "targetUnicode": "Customer Name:",
+    "replacementUnicode": "Account Name:",
+    "expected": {
+      "kind": "capability",
+      "capability": "replacementWithSubstitution"
+    },
+    "expectedDisclosureCodes": [],
+    "assets": [
+      {
+        "package": "@fontsource/noto-sans",
+        "version": "5.3.0",
+        "licence": "OFL-1.1"
+      }
+    ],
+    "eligibleText": {
+      "sourceGlyphCount": 50,
+      "groups": [
+        {
+          "text": "Shopee",
+          "styleRunCount": 1,
+          "replacementRuns": [
+            "Store"
+          ]
+        },
+        {
+          "text": "Customer Name:",
+          "styleRunCount": 1,
+          "replacementRuns": [
+            "Account Name:"
+          ]
+        },
+        {
+          "text": "Alex Morgan",
+          "styleRunCount": 1,
+          "replacementRuns": [
+            "Alex Moreno"
+          ]
+        },
+        {
+          "text": "this is a bold text",
+          "styleRunCount": 3,
+          "replacementRuns": [
+            "this is a ",
+            "firm",
+            " text"
+          ]
+        }
+      ],
+      "excludedGraphicCount": 1
+    },
+    "sha256": "d92209c2eacc15a007c6d16d10e0d91baf7cb8a115548c1180eb6f37e68f2f4d"
+  }
+]

@@ -1,0 +1,6 @@
+{
+  "name": "@pdf-editor/pdf-engine",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts"
+}

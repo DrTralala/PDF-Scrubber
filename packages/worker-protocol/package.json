@@ -1,0 +1,9 @@
+{
+  "name": "@pdf-editor/worker-protocol",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@pdf-editor/pdf-engine": "*"
+  }
+}

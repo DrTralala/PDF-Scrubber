@@ -64,7 +64,7 @@ describe('embedResolvedFontRuns', () => {
     const tampered = new Uint8Array(font.bytes);
     const finalIndex = tampered.length - 1;
     tampered[finalIndex] = tampered[finalIndex]! ^ 0xff;
-    const text = 'Folio';
+    const text = 'PDF-Scrubber';
     const document = await PDFDocument.create();
 
     await expect(embedResolvedFontRuns(document, [{

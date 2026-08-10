@@ -1,0 +1,51 @@
+{
+  "name": "pdf-scrubber",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.18.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "start": "npm run dev --workspace @pdf-editor/web --",
+    "build": "npm run build --workspaces --if-present",
+    "build:web": "npm run build --workspace @pdf-editor/web",
+    "typecheck": "tsc -p tsconfig.base.json --noEmit",
+    "test:unit": "vitest run",
+    "test:web:unit": "vitest run --config apps/web/vite.config.ts",
+    "test:browser": "playwright test",
+    "test:web": "tsx tools/run-web-tests.ts",
+    "validate:large-pdfs": "tsx tools/validate-large-pdfs.ts",
+    "test:m0": "npm run build:fixtures && npm run test:unit && npm run test:browser && npm run m0:report",
+    "build:fixtures": "tsx packages/test-support/src/corpus/build-fixtures.ts",
+    "m0:report": "tsx tools/run-m0.ts"
+  },
+  "dependencies": {
+    "@fontsource/merriweather": "5.3.0",
+    "@fontsource/noto-sans": "5.3.0",
+    "@fontsource/noto-sans-arabic": "5.3.0",
+    "@fontsource/open-sans": "5.3.0",
+    "@fontsource/source-code-pro": "5.3.0",
+    "@pdf-lib/fontkit": "1.1.1",
+    "@pdf-lib/standard-fonts": "1.0.0",
+    "fast-xml-parser": "5.10.1",
+    "harfbuzzjs": "1.4.0",
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.1.200",
+    "pixelmatch": "7.2.0",
+    "pngjs": "7.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0",
+    "@types/node": "24.13.3",
+    "@types/pngjs": "6.0.5",
+    "fast-check": "4.9.0",
+    "tsx": "4.23.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.5",
+    "vitest": "4.1.10"
+  }
+}
