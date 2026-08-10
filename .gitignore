@@ -1,0 +1,43 @@
+# Local OpenCode and planning state
+.opencode/
+.superpowers/
+docs/
+
+# Dependencies and package-manager caches
+node_modules/
+**/node_modules/
+.cache/
+**/.cache/
+.npm/
+**/.npm/
+.pnpm-store/
+**/.pnpm-store/
+
+# Build and tool caches/output
+.vite/
+**/.vite/
+.turbo/
+**/.turbo/
+.parcel-cache/
+**/.parcel-cache/
+dist/
+**/dist/
+build/
+**/build/
+coverage/
+playwright-report/
+test-results/
+artifacts/
+
+# Local-only diagnostic material
+errors/
+sample.pdf
+*.log
+*.tsbuildinfo
+.eslintcache
+.stylelintcache
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+*.swp
