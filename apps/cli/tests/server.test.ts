@@ -1,11 +1,28 @@
-import { rmSync, symlinkSync } from 'node:fs';
+import { constants, copyFileSync, existsSync, rmSync } from 'node:fs';
 import { open, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Readable } from 'node:stream';
+import { promisify } from 'node:util';
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+
+const fsMockState = vi.hoisted(() => ({ procfsUnavailable: false }));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    realpath: vi.fn(async (path: Parameters<typeof actual.realpath>[0]) => {
+      if (fsMockState.procfsUnavailable && String(path).startsWith('/proc/self/fd/')) {
+        throw Object.assign(new Error('procfs unavailable'), { code: 'EACCES' });
+      }
+      return actual.realpath(path);
+    }),
+  };
+});
 
 // @ts-expect-error The published runtime is intentionally plain JavaScript with JSDoc types.
 import { contentTypeFor, resolveAssetPath, startStaticServer } from '../lib/server.js';
@@ -14,8 +31,10 @@ let webRoot: string;
 let outsideRoot: string;
 const runningServers: Array<Awaited<ReturnType<typeof startStaticServer>>> = [];
 const blockers: Server[] = [];
+const execFileAsync = promisify(execFile);
 
 beforeEach(async () => {
+  fsMockState.procfsUnavailable = false;
   webRoot = await mkdtemp(join(tmpdir(), 'pdf-scrubber-server-'));
   outsideRoot = await mkdtemp(join(tmpdir(), 'pdf-scrubber-outside-'));
   await mkdir(join(webRoot, 'assets'));
@@ -25,6 +44,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  fsMockState.procfsUnavailable = false;
   vi.restoreAllMocks();
   await Promise.all(runningServers.splice(0).map((running) => running.close()));
   await Promise.all(blockers.splice(0).map(closeServer));
@@ -90,10 +110,18 @@ test('returns 404 for unknown assets and directories', async () => {
   expect((await fetch(new URL('assets/', running.url))).status).toBe(404);
 });
 
-test('does not serve a symlink whose target escapes the web root', async () => {
+test('does not serve a symlink whose target escapes the web root', async (context) => {
   const outsidePath = join(outsideRoot, 'secret.txt');
   await writeFile(outsidePath, 'external secret');
-  await symlink(outsidePath, join(webRoot, 'assets', 'escape.txt'));
+  try {
+    await symlink(outsidePath, join(webRoot, 'assets', 'escape.txt'));
+  } catch (error) {
+    if (isWindowsSymlinkPrivilegeError(error)) {
+      context.skip();
+      return;
+    }
+    throw error;
+  }
   const running = await startTrackedServer(0, true);
 
   const response = await fetch(new URL('assets/escape.txt', running.url));
@@ -102,17 +130,21 @@ test('does not serve a symlink whose target escapes the web root', async () => {
   expect(await response.text()).not.toContain('external secret');
 });
 
-test('streams from a pinned descriptor when the pathname is replaced after validation', async () => {
+test('streams from a pinned descriptor when the pathname is replaced after validation', async (context) => {
   const assetPath = join(webRoot, 'assets', 'race.txt');
   const outsidePath = join(outsideRoot, 'race.txt');
   await writeFile(assetPath, 'safe bytes');
   await writeFile(outsidePath, 'external bytes');
+  if (!(await canReplaceOpenPath(assetPath))) {
+    context.skip();
+    return;
+  }
   const { prototype, originalCreateReadStream } = await fileHandleStreamPrototype(assetPath);
   const createReadStream = vi
     .spyOn(prototype, 'createReadStream')
     .mockImplementation(function (this: typeof prototype, options) {
       rmSync(assetPath);
-      symlinkSync(outsidePath, assetPath);
+      copyFileSync(outsidePath, assetPath);
       return originalCreateReadStream.call(this, options);
     });
   const running = await startTrackedServer(0, true);
@@ -123,6 +155,63 @@ test('streams from a pinned descriptor when the pathname is replaced after valid
   expect(response.status).toBe(200);
   expect(await response.text()).toBe('safe bytes');
 });
+
+test.skipIf(process.platform !== 'linux')(
+  'falls back to descriptor and pathname identity when procfs is unavailable',
+  async () => {
+    fsMockState.procfsUnavailable = true;
+    const running = await startTrackedServer(0, true);
+
+    const response = await fetch(running.url);
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe('<h1>PDF-Scrubber</h1>');
+  },
+);
+
+test.skipIf(process.platform !== 'linux')(
+  'rejects pathname replacement during procfs fallback identity validation',
+  async () => {
+    const assetPath = join(webRoot, 'assets', 'fallback-race.txt');
+    const outsidePath = join(outsideRoot, 'fallback-race.txt');
+    await writeFile(assetPath, 'safe bytes');
+    await writeFile(outsidePath, 'external bytes');
+    const { prototype, originalStat } = await fileHandlePrototype(assetPath);
+    vi.spyOn(prototype, 'stat').mockImplementationOnce(async function (this: typeof prototype) {
+      const assetStats = await originalStat.call(this);
+      rmSync(assetPath);
+      copyFileSync(outsidePath, assetPath);
+      return assetStats;
+    });
+    fsMockState.procfsUnavailable = true;
+    const running = await startTrackedServer(0, true);
+
+    const response = await fetch(new URL('assets/fallback-race.txt', running.url));
+
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain('external bytes');
+  },
+);
+
+test.skipIf(process.platform === 'win32')(
+  'returns promptly for a stable FIFO without serving it',
+  async () => {
+    const fifoPath = join(webRoot, 'assets', 'stable-fifo');
+    await execFileAsync('mkfifo', [fifoPath]);
+    const running = await startTrackedServer(0, true);
+    const rescue = setTimeout(() => {
+      void open(fifoPath, constants.O_WRONLY | constants.O_NONBLOCK)
+        .then((handle) => handle.close())
+        .catch(() => undefined);
+    }, 1_000);
+
+    const response = await fetch(new URL('assets/stable-fifo', running.url), {
+      signal: AbortSignal.timeout(500),
+    });
+    clearTimeout(rescue);
+    expect(response.status).toBe(404);
+  },
+);
 
 test('contains asynchronous file-read failures and keeps serving', async () => {
   const assetPath = join(webRoot, 'index.html');
@@ -218,13 +307,61 @@ function isAddressInUse(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error && error.code === 'EADDRINUSE';
 }
 
+function isWindowsSymlinkPrivilegeError(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    process.platform === 'win32' &&
+    error instanceof Error &&
+    'code' in error &&
+    ['EACCES', 'EPERM'].includes(String(error.code))
+  );
+}
+
 async function fileHandleStreamPrototype(assetPath: string) {
+  const { prototype, originalCreateReadStream } = await fileHandlePrototype(assetPath);
+  return { prototype, originalCreateReadStream };
+}
+
+async function fileHandlePrototype(assetPath: string) {
   const fileHandle = await open(assetPath, 'r');
   const prototype = Object.getPrototypeOf(fileHandle) as Pick<
     typeof fileHandle,
-    'createReadStream'
+    'createReadStream' | 'stat'
   >;
   const originalCreateReadStream = prototype.createReadStream;
+  const originalStat = prototype.stat;
   await fileHandle.close();
-  return { prototype, originalCreateReadStream };
+  return { prototype, originalCreateReadStream, originalStat };
+}
+
+async function canReplaceOpenPath(assetPath: string) {
+  const probePath = `${assetPath}.replacement-probe`;
+  const fileHandle = await open(assetPath, 'r');
+  copyFileSync(assetPath, probePath);
+  try {
+    try {
+      rmSync(assetPath);
+      copyFileSync(probePath, assetPath);
+      return true;
+    } catch (error) {
+      if (isWindowsOpenPathReplacementError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  } finally {
+    await fileHandle.close();
+    if (!existsSync(assetPath)) {
+      copyFileSync(probePath, assetPath);
+    }
+    rmSync(probePath, { force: true });
+  }
+}
+
+function isWindowsOpenPathReplacementError(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    process.platform === 'win32' &&
+    error instanceof Error &&
+    'code' in error &&
+    ['EACCES', 'EBUSY', 'EPERM'].includes(String(error.code))
+  );
 }

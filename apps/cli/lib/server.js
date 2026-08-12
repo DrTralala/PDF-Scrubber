@@ -135,7 +135,8 @@ async function openRegularAsset(webRoot, assetPath) {
 
   try {
     const noFollow = constants.O_NOFOLLOW ?? 0;
-    assetHandle = await open(assetPath, constants.O_RDONLY | noFollow);
+    const nonBlocking = constants.O_NONBLOCK ?? 0;
+    assetHandle = await open(assetPath, constants.O_RDONLY | noFollow | nonBlocking);
     const assetStats = await assetHandle.stat();
     if (!assetStats.isFile()) {
       await assetHandle.close();
@@ -159,13 +160,23 @@ async function openRegularAsset(webRoot, assetPath) {
 
 async function resolveOpenedPath(assetHandle, assetPath, assetStats) {
   if (process.platform === 'linux') {
-    return realpath(`/proc/self/fd/${assetHandle.fd}`);
+    try {
+      return await realpath(`/proc/self/fd/${assetHandle.fd}`);
+    } catch (error) {
+      if (!isProcfsUnavailable(error)) {
+        throw error;
+      }
+    }
   }
 
   // O_NOFOLLOW prevents final-component symlinks where supported. On platforms
-  // without /proc, require the post-open path to identify the pinned descriptor.
+  // without accessible /proc, require the post-open path to identify the pinned
+  // descriptor. O_NONBLOCK keeps replacement FIFOs from stalling validation.
   const openedPath = await realpath(assetPath);
-  const pathHandle = await open(openedPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  const pathHandle = await open(
+    openedPath,
+    constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+  );
   try {
     const pathStats = await pathHandle.stat();
     if (assetStats.dev !== pathStats.dev || assetStats.ino !== pathStats.ino) {
@@ -231,5 +242,13 @@ function isNotFound(error) {
     error instanceof Error &&
     'code' in error &&
     ['EACCES', 'ELOOP', 'ENOENT', 'ENOTDIR'].includes(error.code)
+  );
+}
+
+function isProcfsUnavailable(error) {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    ['EACCES', 'ENOENT', 'ENOTDIR', 'ENOSYS', 'EPERM'].includes(error.code)
   );
 }

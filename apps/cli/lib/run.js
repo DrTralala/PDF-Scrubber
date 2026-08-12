@@ -45,18 +45,25 @@ export async function run(argv, dependencies = {}) {
     explicitPort: parsed.explicitPort,
   });
 
-  stdout.write(`PDF-Scrubber is ready at ${runningServer.url}\n`);
-  installShutdownHandlers(runningServer, stderr);
+  let managedServer;
 
-  if (parsed.openBrowser) {
-    try {
-      await (dependencies.openBrowser ?? open)(runningServer.url);
-    } catch {
-      stderr.write(`Open this URL manually: ${runningServer.url}\n`);
+  try {
+    managedServer = createManagedServer(runningServer, stderr);
+    stdout.write(`PDF-Scrubber is ready at ${managedServer.url}\n`);
+
+    if (parsed.openBrowser) {
+      try {
+        await (dependencies.openBrowser ?? open)(managedServer.url);
+      } catch {
+        stderr.write(`Open this URL manually: ${managedServer.url}\n`);
+      }
     }
-  }
 
-  return runningServer;
+    return managedServer;
+  } catch (error) {
+    await (managedServer?.close() ?? runningServer.close()).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function readPackageVersion() {
@@ -67,7 +74,7 @@ async function readPackageVersion() {
   return packageJson.version;
 }
 
-function installShutdownHandlers(runningServer, stderr) {
+function createManagedServer(runningServer, stderr) {
   const closeServer = runningServer.close.bind(runningServer);
   let shutdownPromise;
 
@@ -90,9 +97,21 @@ function installShutdownHandlers(runningServer, stderr) {
       process.exitCode = 1;
     });
 
-  process.once('SIGINT', shutdown);
-  process.once('SIGTERM', shutdown);
-  runningServer.close = close;
+  try {
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  } catch (error) {
+    removeHandlers();
+    throw error;
+  }
+
+  return {
+    server: runningServer.server,
+    host: runningServer.host,
+    port: runningServer.port,
+    url: runningServer.url,
+    close,
+  };
 }
 
 function errorMessage(error) {
