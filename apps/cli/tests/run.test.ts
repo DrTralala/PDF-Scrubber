@@ -35,8 +35,14 @@ describe('run', () => {
   test('starts the packaged app and opens exactly the running server URL', async () => {
     const dependencies = createDependencies();
 
-    await expect(run([], dependencies)).resolves.toBe(dependencies.runningServer);
+    const running = await run([], dependencies);
 
+    expect(running).toMatchObject({
+      server: dependencies.runningServer.server,
+      host: dependencies.runningServer.host,
+      port: dependencies.runningServer.port,
+      url: dependencies.runningServer.url,
+    });
     expect(dependencies.startServer).toHaveBeenCalledWith({
       webRoot: resolve(import.meta.dirname, '../dist'),
       port: 5173,
@@ -61,7 +67,9 @@ describe('run', () => {
     const dependencies = createDependencies();
     dependencies.openBrowser.mockRejectedValueOnce(new Error('browser unavailable'));
 
-    await expect(run([], dependencies)).resolves.toBe(dependencies.runningServer);
+    await expect(run([], dependencies)).resolves.toMatchObject({
+      url: dependencies.runningServer.url,
+    });
 
     expect(dependencies.stderr.write).toHaveBeenCalledWith(
       `Open this URL manually: ${dependencies.runningServer.url}\n`,
@@ -76,6 +84,31 @@ describe('run', () => {
     await expect(run([], dependencies)).rejects.toThrow('missing build');
 
     expect(dependencies.openBrowser).not.toHaveBeenCalled();
+  });
+
+  test('supports an immutable running server without mutating it', async () => {
+    const dependencies = createDependencies({ frozenServer: true });
+
+    const running = await run(['--no-open'], dependencies);
+
+    expect(running).not.toBe(dependencies.runningServer);
+    await running?.close();
+    expect(dependencies.serverClose).toHaveBeenCalledOnce();
+    expect(addedSignalListenerOrUndefined('SIGINT')).toBeUndefined();
+    expect(addedSignalListenerOrUndefined('SIGTERM')).toBeUndefined();
+  });
+
+  test('closes the started server when post-start setup fails', async () => {
+    const dependencies = createDependencies();
+    dependencies.stdout.write.mockImplementationOnce(() => {
+      throw new Error('stdout failed');
+    });
+
+    await expect(run(['--no-open'], dependencies)).rejects.toThrow('stdout failed');
+
+    expect(dependencies.serverClose).toHaveBeenCalledOnce();
+    expect(addedSignalListenerOrUndefined('SIGINT')).toBeUndefined();
+    expect(addedSignalListenerOrUndefined('SIGTERM')).toBeUndefined();
   });
 
   test('installed shutdown handler closes the running server exactly once', async () => {
@@ -130,17 +163,20 @@ describe('run', () => {
   });
 });
 
-function createDependencies() {
+function createDependencies(options: { frozenServer?: boolean } = {}) {
   const stdout = { write: vi.fn(() => true) };
   const stderr = { write: vi.fn(() => true) };
   const serverClose = vi.fn(async () => undefined);
-  const runningServer = {
+  const runningServerValue = {
     server: null,
     host: '127.0.0.1' as const,
     port: 61234,
     url: 'http://127.0.0.1:61234/',
     close: serverClose,
   };
+  const runningServer = options.frozenServer
+    ? Object.freeze(runningServerValue)
+    : runningServerValue;
 
   return {
     stdout,
