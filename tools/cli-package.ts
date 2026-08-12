@@ -120,9 +120,16 @@ function referencedAssets(path: string, contents: string): readonly string[] {
 
 function htmlAssetReferences(contents: string): readonly string[] {
   const assets = new Set<string>();
-  const attribute = /\b(?:href|src)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
-  for (const match of contents.matchAll(attribute)) {
-    addAssetReference(assets, decodeHtmlReferences(match[1] ?? match[2] ?? match[3] ?? ''));
+  for (const tag of htmlStartTags(contents)) {
+    for (const attribute of htmlAttributes(tag)) {
+      if (attribute.name === 'src' || attribute.name === 'href') {
+        addAssetReference(assets, decodeHtmlReferences(attribute.value));
+      } else if (attribute.name === 'srcset') {
+        for (const candidate of decodeHtmlReferences(attribute.value).split(',')) {
+          addAssetReference(assets, candidate.trim().split(/\s+/, 1)[0] ?? '');
+        }
+      }
+    }
   }
   return [...assets];
 }
@@ -133,6 +140,10 @@ function cssAssetReferences(contents: string): readonly string[] {
   const url = /url\(\s*(?:"((?:\\.|[^"])*)"|'((?:\\.|[^'])*)'|([^\s)]*))\s*\)/gi;
   for (const match of withoutComments.matchAll(url)) {
     addAssetReference(assets, decodeCssEscapes(match[1] ?? match[2] ?? match[3] ?? ''));
+  }
+  const importString = /@import\s+(?:"((?:\\.|[^"])*)"|'((?:\\.|[^'])*)')/gi;
+  for (const match of withoutComments.matchAll(importString)) {
+    addAssetReference(assets, decodeCssEscapes(match[1] ?? match[2] ?? ''));
   }
   return [...assets];
 }
@@ -161,6 +172,16 @@ function javascriptStringLiterals(contents: string): readonly string[] {
       index = contents.indexOf('*/', index + 2);
       if (index === -1) break;
       index += 2;
+      continue;
+    }
+    if (character === '/' && regexCanStartAfter(contents, index)) {
+      index = skipJavascriptRegex(contents, index);
+      continue;
+    }
+    if (character === '`') {
+      const template = readStaticTemplate(contents, index);
+      index = template.end;
+      if (template.value !== undefined) literals.push(template.value);
       continue;
     }
     if (character !== '"' && character !== "'") {
@@ -192,6 +213,132 @@ function javascriptStringLiterals(contents: string): readonly string[] {
   return literals;
 }
 
+function htmlStartTags(contents: string): readonly string[] {
+  const tags: string[] = [];
+  let index = 0;
+  while (index < contents.length) {
+    if (contents.startsWith('<!--', index)) {
+      const end = contents.indexOf('-->', index + 4);
+      index = end === -1 ? contents.length : end + 3;
+      continue;
+    }
+    if (contents[index] !== '<' || contents[index + 1] === '/' || contents[index + 1] === '!') {
+      index += 1;
+      continue;
+    }
+    const start = index;
+    let quote: string | undefined;
+    index += 1;
+    while (index < contents.length) {
+      const character = contents[index];
+      if (quote !== undefined) {
+        if (character === quote) quote = undefined;
+      } else if (character === '"' || character === "'") {
+        quote = character;
+      } else if (character === '>') {
+        tags.push(contents.slice(start, index + 1));
+        index += 1;
+        break;
+      }
+      index += 1;
+    }
+  }
+  return tags;
+}
+
+function htmlAttributes(tag: string): readonly Readonly<{ name: string; value: string }>[] {
+  const attributes: Readonly<{ name: string; value: string }>[] = [];
+  let index = 1;
+  while (index < tag.length && !/[\s>]/.test(tag[index] ?? '')) index += 1;
+  while (index < tag.length) {
+    while (/\s/.test(tag[index] ?? '')) index += 1;
+    if (tag[index] === '>' || tag[index] === '/') break;
+    const nameStart = index;
+    while (index < tag.length && !/[\s=/>]/.test(tag[index] ?? '')) index += 1;
+    const name = tag.slice(nameStart, index).toLowerCase();
+    while (/\s/.test(tag[index] ?? '')) index += 1;
+    if (tag[index] !== '=') continue;
+    index += 1;
+    while (/\s/.test(tag[index] ?? '')) index += 1;
+    const quote = tag[index];
+    let value: string;
+    if (quote === '"' || quote === "'") {
+      const valueStart = ++index;
+      while (index < tag.length && tag[index] !== quote) index += 1;
+      value = tag.slice(valueStart, index);
+      index += 1;
+    } else {
+      const valueStart = index;
+      while (index < tag.length && !/[\s>]/.test(tag[index] ?? '')) index += 1;
+      value = tag.slice(valueStart, index);
+    }
+    attributes.push({ name, value });
+  }
+  return attributes;
+}
+
+function regexCanStartAfter(contents: string, index: number): boolean {
+  let previous = index - 1;
+  while (previous >= 0 && /\s/.test(contents[previous] ?? '')) previous -= 1;
+  return previous < 0 || /[=(:,!&|?{};\[]/.test(contents[previous] ?? '');
+}
+
+function skipJavascriptRegex(contents: string, start: number): number {
+  let inClass = false;
+  let index = start + 1;
+  while (index < contents.length) {
+    const character = contents[index];
+    if (character === '\\') index += 2;
+    else if (character === '[') { inClass = true; index += 1; }
+    else if (character === ']') { inClass = false; index += 1; }
+    else if (character === '/' && !inClass) {
+      index += 1;
+      while (/[a-z]/i.test(contents[index] ?? '')) index += 1;
+      return index;
+    } else if (character === '\n' || character === '\r') return index + 1;
+    else index += 1;
+  }
+  return index;
+}
+
+function readStaticTemplate(
+  contents: string,
+  start: number,
+): Readonly<{ end: number; value?: string }> {
+  let value = '';
+  let index = start + 1;
+  while (index < contents.length) {
+    const character = contents[index];
+    if (character === '\\' && index + 1 < contents.length) {
+      value += character + contents[index + 1];
+      index += 2;
+    } else if (character === '`') {
+      return { end: index + 1, value };
+    } else if (character === '$' && contents[index + 1] === '{') {
+      return { end: skipTemplateWithExpressions(contents, index + 2) };
+    } else {
+      value += character;
+      index += 1;
+    }
+  }
+  return { end: index };
+}
+
+function skipTemplateWithExpressions(contents: string, index: number): number {
+  let braceDepth = 1;
+  while (index < contents.length) {
+    const character = contents[index];
+    if (character === '\\') index += 2;
+    else if (character === '{') { braceDepth += 1; index += 1; }
+    else if (character === '}') { braceDepth -= 1; index += 1; }
+    else if (character === '`' && braceDepth === 0) return index + 1;
+    else if (character === '`') {
+      index = readStaticTemplate(contents, index).end;
+    } else index += 1;
+  }
+  return index;
+}
+
 function addAssetReference(assets: Set<string>, decoded: string): void {
   if (!decoded.startsWith('/assets/')) return;
   const pathname = decoded.split(/[?#]/, 1)[0];
@@ -199,7 +346,11 @@ function addAssetReference(assets: Set<string>, decoded: string): void {
 }
 
 function decodeHtmlReferences(value: string): string {
-  return value.replace(/&(?:#(\d+)|#x([0-9a-f]+)|(?:sol));/gi, (entity, decimal, hexadecimal) => {
+  return value.replace(/&(?:#(\d+)|#x([0-9a-f]+)|(?:sol));?/gi, (entity, decimal, hexadecimal) => {
+    if (hexadecimal !== undefined && !entity.endsWith(';')) {
+      const slashPrefix = hexadecimal.match(/^2f/i)?.[0];
+      if (slashPrefix !== undefined) return `/${hexadecimal.slice(slashPrefix.length)}`;
+    }
     const point = decimal === undefined
       ? hexadecimal === undefined ? 0x2f : Number.parseInt(hexadecimal, 16)
       : Number.parseInt(decimal, 10);

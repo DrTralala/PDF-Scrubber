@@ -1,4 +1,4 @@
-import { rm } from 'node:fs/promises';
+import { access, rm } from 'node:fs/promises';
 import { posix, win32 } from 'node:path';
 import type { Readable } from 'node:stream';
 import type { EventEmitter } from 'node:events';
@@ -15,6 +15,11 @@ export type OwnedChild = Pick<EventEmitter, 'off' | 'once'> & Readonly<{
   stdout: Readable;
 }>;
 
+type ChildResult = Readonly<{
+  code: number | null;
+  signal: NodeJS.Signals | null;
+}>;
+
 const readinessPattern = /PDF-Scrubber is ready at (http:\/\/127\.0\.0\.1:\d+\/)\s*$/m;
 const readinessBufferLimit = 64 * 1024;
 
@@ -28,14 +33,29 @@ export function buildNpmCommand(
   };
 }
 
-export function npmCliPathForRuntime(
+export async function resolveNpmCliPath(
+  environment: Readonly<{ npm_execpath?: string | undefined }>,
   nodeExecutable: string,
   platform: NodeJS.Platform,
-): string {
+  exists: (path: string) => Promise<boolean> = pathExists,
+): Promise<string> {
   const path = platform === 'win32' ? win32 : posix;
-  return path.resolve(
-    path.dirname(nodeExecutable),
-    platform === 'win32' ? 'node_modules/npm/bin/npm-cli.js' : '../lib/node_modules/npm/bin/npm-cli.js',
+  const invoked = environment.npm_execpath;
+  const candidates = [
+    invoked !== undefined && /(?:^|[\\/])npm-cli\.js$/i.test(invoked) ? invoked : undefined,
+    path.resolve(
+      path.dirname(nodeExecutable),
+      platform === 'win32'
+        ? 'node_modules/npm/bin/npm-cli.js'
+        : '../lib/node_modules/npm/bin/npm-cli.js',
+    ),
+  ].filter((candidate): candidate is string => candidate !== undefined);
+
+  for (const candidate of candidates) {
+    if (await exists(candidate)) return candidate;
+  }
+  throw new Error(
+    'Unable to locate npm\'s JavaScript CLI. Set npm_execpath to npm-cli.js.',
   );
 }
 
@@ -92,16 +112,67 @@ export async function terminateOwnedChild(
   if (child.exitCode !== null || child.signalCode !== null) return;
   const gracefulTimeoutMs = options.gracefulTimeoutMs ?? 5_000;
   const forceTimeoutMs = options.forceTimeoutMs ?? 5_000;
-  const gracefulExit = waitForChildExit(child);
+  const gracefulWait = waitForOwnedChild(child, gracefulTimeoutMs, 'owned CLI child');
   if (!child.kill('SIGTERM')) throw new Error('Failed to signal owned CLI child');
-  if (await settlesWithin(gracefulExit, gracefulTimeoutMs)) return;
+  try {
+    await gracefulWait;
+    return;
+  } catch (error) {
+    if (!isTimeoutError(error)) throw error;
+  }
   if (options.forceSignalSupported === false) {
     throw new Error('Owned CLI child did not exit and forced termination is unsupported');
   }
+  const forceWait = waitForOwnedChild(
+    child,
+    forceTimeoutMs,
+    'owned CLI child after forced termination',
+  );
   if (!child.kill('SIGKILL')) throw new Error('Failed to force-terminate owned CLI child');
-  if (!await settlesWithin(gracefulExit, forceTimeoutMs)) {
-    throw new Error('Owned CLI child did not exit after forced termination');
+  try {
+    await forceWait;
+  } catch (error) {
+    if (isTimeoutError(error)) throw new Error('Owned CLI child did not exit after forced termination');
+    throw error;
   }
+}
+
+export function waitForOwnedChild(
+  child: OwnedChild,
+  timeoutMs: number,
+  name: string,
+): Promise<ChildResult> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
+  }
+  return new Promise((resolvePromise, reject) => {
+    let lastError: Error | undefined;
+    const finish = (result: ChildResult): void => {
+      clearTimeout(timer);
+      child.off('close', onClose);
+      child.off('error', onError);
+      child.off('exit', onExit);
+      resolvePromise(result);
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      finish({ code, signal });
+    };
+    const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+      finish({ code, signal });
+    };
+    const onError = (error: Error): void => { lastError = error; };
+    const timer = setTimeout(() => {
+      child.off('close', onClose);
+      child.off('error', onError);
+      child.off('exit', onExit);
+      reject(new Error(
+        `Timed out waiting for ${name}${lastError === undefined ? '' : ` after error: ${lastError.message}`}`,
+      ));
+    }, timeoutMs);
+    child.once('close', onClose);
+    child.once('error', onError);
+    child.once('exit', onExit);
+  });
 }
 
 export async function assertUrlUnreachable(
@@ -171,26 +242,31 @@ export async function cleanupCliSmoke(
   if (errors.length > 0) throw new AggregateError(errors, 'CLI smoke cleanup failed');
 }
 
-function waitForChildExit(child: OwnedChild): Promise<void> {
-  return new Promise((resolvePromise) => {
-    let settled = false;
-    const finish = (): void => {
-      if (settled) return;
-      settled = true;
-      child.off('error', finish);
-      child.off('exit', finish);
-      resolvePromise();
-    };
-    child.once('error', finish);
-    child.once('exit', finish);
-  });
-}
+export async function runWithCleanup<T>(
+  run: () => Promise<T>,
+  cleanup: () => Promise<void>,
+): Promise<T> {
+  let result: T | undefined;
+  let runError: unknown;
+  try {
+    result = await run();
+  } catch (error) {
+    runError = error;
+  }
 
-async function settlesWithin(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
-  return Promise.race([
-    promise.then(() => true, () => true),
-    delay(timeoutMs).then(() => false),
-  ]);
+  let cleanupError: unknown;
+  try {
+    await cleanup();
+  } catch (error) {
+    cleanupError = error;
+  }
+
+  if (runError !== undefined && cleanupError !== undefined) {
+    throw new AggregateError([runError, cleanupError], 'CLI smoke run and cleanup failed');
+  }
+  if (runError !== undefined) throw runError;
+  if (cleanupError !== undefined) throw cleanupError;
+  return result!;
 }
 
 async function collectCleanupError(errors: unknown[], cleanup: () => Promise<void>): Promise<void> {
@@ -203,4 +279,17 @@ async function collectCleanupError(errors: unknown[], cleanup: () => Promise<voi
 
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('Timed out waiting for');
 }
