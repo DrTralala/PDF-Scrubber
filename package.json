@@ -13,6 +13,8 @@
     "start": "npm run dev --workspace @pdf-editor/web --",
     "build": "npm run build --workspaces --if-present",
     "build:web": "npm run build --workspace @pdf-editor/web",
+    "build:cli": "npm run build --workspace @pdf-editor/web -- --outDir ../../apps/cli/dist --emptyOutDir",
+    "test:cli": "vitest run --config apps/cli/vitest.config.ts",
     "typecheck": "tsc -p tsconfig.base.json --noEmit",
     "test:unit": "vitest run",
     "test:web:unit": "vitest run --config apps/web/vite.config.ts",
