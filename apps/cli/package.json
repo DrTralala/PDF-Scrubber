@@ -24,6 +24,9 @@
   "engines": {
     "node": "24.18.0"
   },
+  "scripts": {
+    "prepack": "node --input-type=module -e \"import { access } from 'node:fs/promises'; await access('dist/index.html');\""
+  },
   "dependencies": {
     "open": "11.0.0"
   }

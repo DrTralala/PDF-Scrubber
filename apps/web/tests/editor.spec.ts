@@ -6,6 +6,11 @@ import { PDFDocument, StandardFonts } from 'pdf-lib';
 
 import { buildDecorationFixture } from '../../../packages/test-support/src/corpus/decorations';
 import { installNoNetworkGuard } from '../../../tools/check-no-network';
+import {
+  acceptRichFontSubstitutions,
+  activateByKeyboard,
+  expandAllowedWidth,
+} from './editor-interactions';
 
 function fixture(name: string): string {
   return resolve(process.cwd(), 'fixtures/generated', name);
@@ -15,36 +20,10 @@ function projectFile(name: string): string {
   return resolve(process.cwd(), name);
 }
 
-async function activateByKeyboard(page: Page, overlay: Locator): Promise<void> {
-  await overlay.focus();
-  await page.keyboard.press('Enter');
-}
-
 async function selectByPointer(page: Page, overlay: Locator): Promise<void> {
   const bounds = await overlay.boundingBox();
   if (bounds === null) throw new Error('Text group overlay has no pointer bounds');
   await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-}
-
-async function acceptRichFontSubstitutions(page: Page): Promise<void> {
-  const consents = page.locator('.font-requirements input[type="checkbox"]');
-  await expect(consents.first()).toBeVisible();
-  for (let index = 0; index < await consents.count(); index += 1) {
-    await consents.nth(index).check();
-  }
-}
-
-async function expandAllowedWidth(page: Page): Promise<void> {
-  const slider = page.getByLabel('Allowed width');
-  const maximum = await slider.getAttribute('max');
-  if (maximum === null) throw new Error('Allowed width range has no maximum');
-  await slider.evaluate((element, value) => {
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
-    if (setter === undefined) throw new Error('HTMLInputElement value setter is unavailable');
-    setter.call(element, value);
-    element.dispatchEvent(new Event('input', { bubbles: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true }));
-  }, maximum);
 }
 
 async function twoPageFixture(): Promise<Buffer> {
