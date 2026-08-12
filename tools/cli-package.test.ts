@@ -195,6 +195,80 @@ describe('assertBuiltAssetClosure', () => {
     await expect(assertBuiltAssetClosure(packageRoot, fixedFiles))
       .rejects.toThrow('unsafe built asset reference');
   });
+
+  test.each([
+    {
+      name: 'semicolonless HTML hexadecimal entity',
+      file: 'dist/index.html',
+      contents: '<script src="&#x2fassets/missing-semicolon.js"></script>',
+      missing: 'dist/assets/missing-semicolon.js',
+    },
+    {
+      name: 'HTML srcset candidate',
+      file: 'dist/index.html',
+      contents: '<img srcset="/assets/first.png 1x, &#47assets/missing-srcset.png 2x">',
+      missing: 'dist/assets/missing-srcset.png',
+      packaged: ['dist/assets/first.png'],
+    },
+    {
+      name: 'CSS string-form import',
+      file: 'dist/assets/app.css',
+      contents: '@import "/assets/missing-import.css" screen;',
+      missing: 'dist/assets/missing-import.css',
+    },
+    {
+      name: 'static JavaScript template literal',
+      file: 'dist/assets/app.js',
+      contents: 'const worker = `/assets/missing-template.js`;',
+      missing: 'dist/assets/missing-template.js',
+    },
+  ])('rejects omitted active reference from $name', async ({
+    file,
+    contents,
+    missing,
+    packaged = [],
+  }) => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': file === 'dist/index.html' ? contents : '',
+      [file]: contents,
+      ...Object.fromEntries(packaged.map((path) => [path, 'packaged'])),
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      ...(file === 'dist/index.html' ? [] : [file]),
+      ...packaged,
+    ])).rejects.toThrow(missing);
+  });
+
+  test('ignores HTML comments containing active-looking elements', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': [
+        '<!-- <script src="/assets/commented-script.js"></script> -->',
+        '<!-- <img srcset="/assets/commented-image.png 2x"> -->',
+      ].join(''),
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, fixedFiles)).resolves.toBeUndefined();
+  });
+
+  test('does not desynchronise JavaScript scanning on regex or interpolated templates', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': '',
+      'dist/assets/app.js': [
+        String.raw`const expression = /['\"]/g;`,
+        'const dynamic = `/assets/${name}.js`;',
+        'const worker = "/assets/real-worker.js";',
+      ].join('\n'),
+      'dist/assets/real-worker.js': 'postMessage("ready")',
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      'dist/assets/app.js',
+      'dist/assets/real-worker.js',
+    ])).resolves.toBeUndefined();
+  });
 });
 
 async function createPackageRoot(files: Readonly<Record<string, string>>): Promise<string> {

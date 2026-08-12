@@ -8,8 +8,11 @@ import {
   buildInstalledCliCommand,
   buildNpmCommand,
   cleanupCliSmoke,
-  npmCliPathForRuntime,
+  resolveNpmCliPath,
+  runWithCleanup,
+  terminateOwnedChild,
   waitForReadiness,
+  waitForOwnedChild,
 } from './cli-smoke';
 
 const projectRoot = resolve(import.meta.dirname, '..');
@@ -18,7 +21,7 @@ const requireFromModule = createRequire(import.meta.url);
 const playwrightPath = requireFromModule.resolve('@playwright/test/cli');
 const npmRuntime = {
   nodeExecutable: process.execPath,
-  npmCliPath: npmCliPathForRuntime(process.execPath, process.platform),
+  npmCliPath: await resolveNpmCliPath(process.env, process.execPath, process.platform),
 };
 
 await mkdir(disposableRoot, { recursive: true });
@@ -26,7 +29,7 @@ const temporaryRoot = await mkdtemp(resolve(disposableRoot, 'pdf-scrubber-cli-sm
 let cliChild: ChildProcess | undefined;
 let readinessUrl: string | undefined;
 
-try {
+await runWithCleanup(async () => {
   const packCommand = buildNpmCommand(
     ['pack', '--workspace', 'pdf-scrubber', '--pack-destination', temporaryRoot],
     npmRuntime,
@@ -77,26 +80,26 @@ try {
     shell: false,
     stdio: 'inherit',
   });
-  const status = await waitForExit(playwright, 'Playwright');
-  if (status !== 0) throw new Error(`Packaged CLI smoke exited with status ${status}`);
-} finally {
+  let result;
+  try {
+    result = await waitForOwnedChild(childWithDrainedStdout(playwright), 120_000, 'Playwright');
+  } catch (error) {
+    await terminateOwnedChild(childWithDrainedStdout(playwright), {
+      forceSignalSupported: process.platform !== 'win32',
+    }).catch(() => undefined);
+    throw error;
+  }
+  if (result.code !== 0) {
+    throw new Error(`Packaged CLI smoke exited with status ${result.code}, signal ${result.signal}`);
+  }
+}, async () => {
   await cleanupCliSmoke({
     child: cliChild === undefined ? undefined : cliChildWithStdout(cliChild),
     readinessUrl,
     temporaryRoot,
   });
   console.log('Installed CLI cleanup: ok');
-}
-
-function waitForExit(child: ChildProcess, name: string): Promise<number> {
-  return new Promise((resolvePromise, reject) => {
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      if (code !== null) resolvePromise(code);
-      else reject(new Error(`${name} terminated by ${signal}`));
-    });
-  });
-}
+});
 
 async function waitUntilReachable(url: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
@@ -118,6 +121,11 @@ async function waitUntilReachable(url: string): Promise<void> {
 function cliChildWithStdout(child: ChildProcess) {
   if (child.stdout === null) throw new Error('Owned CLI child stdout is unavailable');
   return Object.assign(child, { stdout: child.stdout });
+}
+
+function childWithDrainedStdout(child: ChildProcess) {
+  if (child.stdout !== null) child.stdout.resume();
+  return Object.assign(child, { stdout: child.stdout ?? process.stdin });
 }
 
 function delay(milliseconds: number): Promise<void> {
