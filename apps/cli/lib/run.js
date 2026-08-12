@@ -1,0 +1,79 @@
+import { readFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import open from 'open';
+
+import { parseArguments, usage } from './arguments.js';
+import { startStaticServer } from './server.js';
+
+const cliRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+/**
+ * @typedef {{
+ *   startServer?: typeof startStaticServer,
+ *   openBrowser?: (url: string) => Promise<unknown>,
+ *   stdout?: Pick<NodeJS.WriteStream, 'write'>,
+ *   stderr?: Pick<NodeJS.WriteStream, 'write'>,
+ *   packageVersion?: string,
+ * }} RunDependencies
+ */
+
+/**
+ * @param {readonly string[]} argv
+ * @param {RunDependencies} [dependencies]
+ */
+export async function run(argv, dependencies = {}) {
+  const parsed = parseArguments(argv);
+  const stdout = dependencies.stdout ?? process.stdout;
+  const stderr = dependencies.stderr ?? process.stderr;
+
+  if (parsed.command === 'help') {
+    stdout.write(`${usage()}\n`);
+    return null;
+  }
+
+  if (parsed.command === 'version') {
+    stdout.write(`${dependencies.packageVersion ?? (await readPackageVersion())}\n`);
+    return null;
+  }
+
+  const startServer = dependencies.startServer ?? startStaticServer;
+  const runningServer = await startServer({
+    webRoot: resolve(cliRoot, 'dist'),
+    port: parsed.port,
+    explicitPort: parsed.explicitPort,
+  });
+
+  stdout.write(`PDF-Scrubber is ready at ${runningServer.url}\n`);
+  installShutdownHandlers(runningServer);
+
+  if (parsed.openBrowser) {
+    try {
+      await (dependencies.openBrowser ?? open)(runningServer.url);
+    } catch {
+      stderr.write(`Open this URL manually: ${runningServer.url}\n`);
+    }
+  }
+
+  return runningServer;
+}
+
+async function readPackageVersion() {
+  const packageJson = JSON.parse(await readFile(resolve(cliRoot, 'package.json'), 'utf8'));
+  if (typeof packageJson.version !== 'string') {
+    throw new Error('CLI package version is unavailable');
+  }
+  return packageJson.version;
+}
+
+function installShutdownHandlers(runningServer) {
+  let shutdownPromise;
+  const shutdown = () => {
+    shutdownPromise ??= runningServer.close();
+    return shutdownPromise;
+  };
+
+  process.once('SIGINT', shutdown);
+  process.once('SIGTERM', shutdown);
+}
