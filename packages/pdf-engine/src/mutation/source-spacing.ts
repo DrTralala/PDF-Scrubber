@@ -71,6 +71,26 @@ export function sourceRunAdvanceProfile(
     : null;
 }
 
+export function sourceAdvanceProfilePrefix(
+  profile: readonly number[] | null,
+  sourceRun: ShapedRun,
+  editedRun: ShapedRun,
+): readonly number[] | null {
+  if (profile === null) return null;
+  const limit = Math.min(profile.length, sourceRun.glyphs.length, editedRun.glyphs.length);
+  let length = 0;
+  while (length < limit) {
+    const sourceGlyph = sourceRun.glyphs[length]!;
+    const editedGlyph = editedRun.glyphs[length]!;
+    if (
+      sourceGlyph.glyphId !== editedGlyph.glyphId ||
+      sourceGlyph.cluster !== editedGlyph.cluster
+    ) break;
+    length += 1;
+  }
+  return length === 0 ? null : Object.freeze(profile.slice(0, length));
+}
+
 export function shapedRunAdvance(
   text: string,
   shapedRun: ShapedRun,

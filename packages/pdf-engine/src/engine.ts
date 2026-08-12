@@ -51,6 +51,7 @@ import {
 } from './mutation/excise';
 import type { ResolvedRichTextRun } from './mutation/redraw';
 import {
+  sourceAdvanceProfilePrefix,
   sourceRunAdvanceProfile,
   shapedRunAdvance,
   sourceRunExtent,
@@ -873,9 +874,11 @@ export class PdfEngineSessions {
               Math.hypot(sourceSpan.renderMatrix[0], sourceSpan.renderMatrix[1]),
               shapedSourceRun.glyphs.length,
             );
-            advanceProfile = run.text === sourceRun.text || run.text.startsWith(sourceRun.text)
-              ? profile
-              : null;
+            advanceProfile = sourceAdvanceProfilePrefix(
+              profile,
+              shapedSourceRun,
+              shapedRun,
+            );
           } catch {
             spacingScale = 1;
             advanceProfile = null;

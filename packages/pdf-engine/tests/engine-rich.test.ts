@@ -111,6 +111,92 @@ describe('rich engine sessions', () => {
     })).rejects.toMatchObject({ code: 'STALE_REVISION' });
   });
 
+  test('applies source advances to unchanged-prefix glyph origins when the source run changes later', async () => {
+    const regularBytes = new Uint8Array(await readFile(regularFontPath));
+    const boldBytes = new Uint8Array(await readFile(boldFontPath));
+    const engine = new PdfEngineSessions({
+      limits: PROVISIONAL_LIMITS,
+      substituteFont: {
+        bytes: regularBytes,
+        family: 'Noto Sans',
+        version: '5.3.0',
+        licence: 'OFL-1.1',
+        source: '@fontsource/noto-sans',
+      },
+      validator: async () => validEvidence(),
+    });
+    const bold = await engine.registerFont({
+      source: 'upload',
+      fileName: 'NotoSans-Bold.woff',
+      bytes: boldBytes,
+    });
+    const opened = await engine.openDocument(
+      new Uint8Array(await readFile(suiteOnePath)),
+    );
+    const analysed = await engine.analysePage(opened.documentId, 0, 0);
+    const group = analysed.textLayout.groups.find(
+      ({ text }) => text === 'Approval status: Pending',
+    )!;
+    const sourceLine = analysed.textLayout.lines.find(({ key }) => key === group.lineKey)!;
+    const prefixLength = [...'Approval status: '].length;
+    const sourceStarts = sourceLine.glyphs
+      .slice(group.glyphRange.start, group.glyphRange.start + prefixLength)
+      .map(({ bounds }) => bounds.x - sourceLine.glyphs[group.glyphRange.start]!.bounds.x);
+    const payload = {
+      selection: {
+        lineKey: group.lineKey,
+        anchorGlyphIndex: group.glyphRange.start,
+        focusGlyphIndex: group.glyphRange.end - 1,
+      },
+      runs: [{
+        text: 'Approval status: Approved',
+        style: group.styleRuns[0]!.style,
+        fontId: bold.id,
+        fontIntent: 'explicit-choice' as const,
+        decorations: group.styleRuns[0]!.decorations,
+        sourceRunIndex: 0,
+      }],
+      allowedRegion: {
+        x: group.bounds.x,
+        y: group.bounds.y - group.bounds.height,
+        width: group.bounds.width * 2,
+        height: group.bounds.height * 3,
+      },
+      substitutionConsents: [],
+    };
+
+    const preview = await engine.previewRichReplacement(opened.documentId, 0, payload);
+    const applied = await engine.applyRichReplacement(
+      opened.documentId,
+      0,
+      payload,
+      preview.preconditions,
+    );
+    const validated = await engine.validateCandidate(
+      opened.documentId,
+      0,
+      applied.candidateId,
+    );
+    expect(validated.valid).toBe(true);
+    const updated = await engine.analysePage(opened.documentId, 1, 0);
+    const updatedGroup = updated.textLayout.groups.find(
+      ({ text }) => text === 'Approval status: Approved',
+    )!;
+    const updatedLine = updated.textLayout.lines.find(({ key }) => key === updatedGroup.lineKey)!;
+    const updatedStarts = updatedLine.glyphs
+      .slice(updatedGroup.glyphRange.start, updatedGroup.glyphRange.start + prefixLength)
+      .map(({ bounds }) => bounds.x - updatedLine.glyphs[updatedGroup.glyphRange.start]!.bounds.x);
+
+    expect(updatedGroup.styleRuns[0]!.style).toMatchObject({
+      fontBaseName: expect.stringMatching(/NotoSans-Bold|Noto Sans Bold/i),
+      fontWeight: group.styleRuns[0]!.style.fontWeight,
+    });
+    expect(updatedStarts).toHaveLength(sourceStarts.length);
+    updatedStarts.forEach((start, index) => {
+      expect(start).toBeCloseTo(sourceStarts[index]!, 5);
+    });
+  }, 30_000);
+
   test('registers fonts and stages a source-backed rich candidate until validation', async () => {
     const regularBytes = new Uint8Array(await readFile(regularFontPath));
     const boldBytes = new Uint8Array(await readFile(boldFontPath));

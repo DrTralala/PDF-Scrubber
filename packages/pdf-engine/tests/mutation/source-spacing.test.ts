@@ -8,6 +8,7 @@ import type {
 import type { ShapedRun } from '../../src/fonts/harfbuzz-shaper';
 import {
   shapedRunAdvance,
+  sourceAdvanceProfilePrefix,
   sourceRunAdvanceProfile,
   sourceRunExtent,
   sourceSpacingScale,
@@ -63,6 +64,21 @@ const shaped: ShapedRun = Object.freeze({
   ]),
 });
 
+function shapedRun(glyphs: readonly (readonly [glyphId: number, cluster: number])[]): ShapedRun {
+  return Object.freeze({
+    direction: 'ltr',
+    unitsPerEm: 1000,
+    glyphs: Object.freeze(glyphs.map(([glyphId, cluster]) => Object.freeze({
+      glyphId,
+      cluster,
+      xAdvance: 500,
+      yAdvance: 0,
+      xOffset: 0,
+      yOffset: 0,
+    }))),
+  });
+}
+
 describe('source spacing helpers', () => {
   test('calculates a finite source-spacing scale', () => {
     expect(sourceSpacingScale({
@@ -93,6 +109,41 @@ describe('source spacing helpers', () => {
 
   test('rejects a source profile when shaping does not preserve glyph count', () => {
     expect(sourceRunAdvanceProfile(line([1, 0]), styleRun, 2, 1)).toBeNull();
+  });
+
+  test.each([
+    {
+      name: 'later replacement',
+      source: shapedRun([[10, 0], [11, 1], [12, 2], [13, 3]]),
+      edited: shapedRun([[10, 0], [11, 1], [20, 2], [21, 3]]),
+      expected: [4, 5],
+    },
+    {
+      name: 'first glyph replacement',
+      source: shapedRun([[10, 0], [11, 1]]),
+      edited: shapedRun([[20, 0], [11, 1]]),
+      expected: null,
+    },
+    {
+      name: 'cluster mismatch',
+      source: shapedRun([[10, 0], [11, 1], [12, 2]]),
+      edited: shapedRun([[10, 0], [11, 2], [12, 3]]),
+      expected: [4],
+    },
+    {
+      name: 'unchanged run',
+      source: shapedRun([[10, 0], [11, 1], [12, 2]]),
+      edited: shapedRun([[10, 0], [11, 1], [12, 2]]),
+      expected: [4, 5, 6],
+    },
+    {
+      name: 'append-only run',
+      source: shapedRun([[10, 0], [11, 1], [12, 2]]),
+      edited: shapedRun([[10, 0], [11, 1], [12, 2], [13, 3]]),
+      expected: [4, 5, 6],
+    },
+  ])('retains source advances for the safe shaped prefix: $name', ({ source, edited, expected }) => {
+    expect(sourceAdvanceProfilePrefix([4, 5, 6], source, edited)).toEqual(expected);
   });
 
   test('measures shaped glyph advances with source text spacing', () => {
