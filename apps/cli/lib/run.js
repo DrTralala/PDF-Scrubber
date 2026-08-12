@@ -46,7 +46,7 @@ export async function run(argv, dependencies = {}) {
   });
 
   stdout.write(`PDF-Scrubber is ready at ${runningServer.url}\n`);
-  installShutdownHandlers(runningServer);
+  installShutdownHandlers(runningServer, stderr);
 
   if (parsed.openBrowser) {
     try {
@@ -67,13 +67,34 @@ async function readPackageVersion() {
   return packageJson.version;
 }
 
-function installShutdownHandlers(runningServer) {
+function installShutdownHandlers(runningServer, stderr) {
+  const closeServer = runningServer.close.bind(runningServer);
   let shutdownPromise;
-  const shutdown = () => {
-    shutdownPromise ??= runningServer.close();
+
+  const removeHandlers = () => {
+    process.off('SIGINT', shutdown);
+    process.off('SIGTERM', shutdown);
+  };
+  const close = () => {
+    removeHandlers();
+    shutdownPromise ??= closeServer();
     return shutdownPromise;
   };
+  const shutdown = () =>
+    close().catch((error) => {
+      try {
+        stderr.write(`Failed to shut down PDF-Scrubber: ${errorMessage(error)}\n`);
+      } catch {
+        // Signal shutdown must never create an unhandled rejection.
+      }
+      process.exitCode = 1;
+    });
 
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
+  runningServer.close = close;
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }

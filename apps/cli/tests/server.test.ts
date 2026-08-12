@@ -1,19 +1,23 @@
+import { rmSync, symlinkSync } from 'node:fs';
+import { open, mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { Readable } from 'node:stream';
 
-import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 // @ts-expect-error The published runtime is intentionally plain JavaScript with JSDoc types.
 import { contentTypeFor, resolveAssetPath, startStaticServer } from '../lib/server.js';
 
 let webRoot: string;
+let outsideRoot: string;
 const runningServers: Array<Awaited<ReturnType<typeof startStaticServer>>> = [];
 const blockers: Server[] = [];
 
 beforeEach(async () => {
   webRoot = await mkdtemp(join(tmpdir(), 'pdf-scrubber-server-'));
+  outsideRoot = await mkdtemp(join(tmpdir(), 'pdf-scrubber-outside-'));
   await mkdir(join(webRoot, 'assets'));
   await writeFile(join(webRoot, 'index.html'), '<h1>PDF-Scrubber</h1>');
   await writeFile(join(webRoot, 'assets', 'editor.woff2'), Buffer.from([1, 2, 3]));
@@ -21,9 +25,13 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(runningServers.splice(0).map((running) => running.close()));
   await Promise.all(blockers.splice(0).map(closeServer));
-  await rm(webRoot, { recursive: true, force: true });
+  await Promise.all([
+    rm(webRoot, { recursive: true, force: true }),
+    rm(outsideRoot, { recursive: true, force: true }),
+  ]);
 });
 
 describe('contentTypeFor', () => {
@@ -47,6 +55,11 @@ describe('resolveAssetPath', () => {
 
   test('rejects encoded traversal outside the web root', () => {
     expect(resolveAssetPath(webRoot, '/%2e%2e/secret')).toBeNull();
+  });
+
+  test('rejects traversal hidden behind encoded delimiters', () => {
+    expect(resolveAssetPath(webRoot, '/dir%3F/%2e%2e%2fsecret')).toBeNull();
+    expect(resolveAssetPath(webRoot, '/dir%23/%2e%2e%2fsecret')).toBeNull();
   });
 });
 
@@ -75,6 +88,60 @@ test('returns 404 for unknown assets and directories', async () => {
 
   expect((await fetch(new URL('missing.js', running.url))).status).toBe(404);
   expect((await fetch(new URL('assets/', running.url))).status).toBe(404);
+});
+
+test('does not serve a symlink whose target escapes the web root', async () => {
+  const outsidePath = join(outsideRoot, 'secret.txt');
+  await writeFile(outsidePath, 'external secret');
+  await symlink(outsidePath, join(webRoot, 'assets', 'escape.txt'));
+  const running = await startTrackedServer(0, true);
+
+  const response = await fetch(new URL('assets/escape.txt', running.url));
+
+  expect(response.status).toBe(404);
+  expect(await response.text()).not.toContain('external secret');
+});
+
+test('streams from a pinned descriptor when the pathname is replaced after validation', async () => {
+  const assetPath = join(webRoot, 'assets', 'race.txt');
+  const outsidePath = join(outsideRoot, 'race.txt');
+  await writeFile(assetPath, 'safe bytes');
+  await writeFile(outsidePath, 'external bytes');
+  const { prototype, originalCreateReadStream } = await fileHandleStreamPrototype(assetPath);
+  const createReadStream = vi
+    .spyOn(prototype, 'createReadStream')
+    .mockImplementation(function (this: typeof prototype, options) {
+      rmSync(assetPath);
+      symlinkSync(outsidePath, assetPath);
+      return originalCreateReadStream.call(this, options);
+    });
+  const running = await startTrackedServer(0, true);
+
+  const response = await fetch(new URL('assets/race.txt', running.url));
+
+  expect(createReadStream).toHaveBeenCalledOnce();
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe('safe bytes');
+});
+
+test('contains asynchronous file-read failures and keeps serving', async () => {
+  const assetPath = join(webRoot, 'index.html');
+  const { prototype } = await fileHandleStreamPrototype(assetPath);
+  const createReadStream = vi
+    .spyOn(prototype, 'createReadStream')
+    .mockImplementationOnce(
+      () =>
+        new Readable({
+          read() {
+            queueMicrotask(() => this.destroy(new Error('forced asynchronous read failure')));
+          },
+        }) as ReturnType<(typeof prototype)['createReadStream']>,
+    );
+  const running = await startTrackedServer(0, true);
+
+  await expect(fetch(running.url).then((response) => response.text())).rejects.toThrow();
+  expect(createReadStream).toHaveBeenCalledOnce();
+  expect((await fetch(new URL('assets/shape.wasm', running.url))).status).toBe(200);
 });
 
 test('shutdown is idempotent', async () => {
@@ -149,4 +216,15 @@ function closeServer(server: Server) {
 
 function isAddressInUse(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && 'code' in error && error.code === 'EADDRINUSE';
+}
+
+async function fileHandleStreamPrototype(assetPath: string) {
+  const fileHandle = await open(assetPath, 'r');
+  const prototype = Object.getPrototypeOf(fileHandle) as Pick<
+    typeof fileHandle,
+    'createReadStream'
+  >;
+  const originalCreateReadStream = prototype.createReadStream;
+  await fileHandle.close();
+  return { prototype, originalCreateReadStream };
 }

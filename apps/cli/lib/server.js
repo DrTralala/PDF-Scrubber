@@ -1,7 +1,8 @@
-import { createReadStream } from 'node:fs';
-import { lstat, realpath } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { open, realpath, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, relative, resolve, sep } from 'node:path';
+import { pipeline } from 'node:stream/promises';
 
 const HOST = '127.0.0.1';
 
@@ -26,8 +27,13 @@ export function contentTypeFor(pathname) {
 
 export function resolveAssetPath(webRoot, requestUrl) {
   try {
-    const decodedRequestUrl = decodeURIComponent(requestUrl);
-    if (decodedRequestUrl.split(/[?#]/, 1)[0].split(/[\\/]/).includes('..')) {
+    const rawPathname = requestUrl.split(/[?#]/, 1)[0];
+    if (rawPathname === undefined) {
+      return null;
+    }
+
+    const decodedRawPathname = decodeURIComponent(rawPathname);
+    if (decodedRawPathname.split(/[\\/]/).includes('..')) {
       return null;
     }
 
@@ -51,12 +57,14 @@ export function resolveAssetPath(webRoot, requestUrl) {
  */
 export async function startStaticServer(options) {
   const webRoot = await realpath(options.webRoot);
-  const rootStats = await lstat(webRoot);
+  const rootStats = await stat(webRoot);
   if (!rootStats.isDirectory()) {
     throw new Error(`Web root is not a directory: ${options.webRoot}`);
   }
 
   const server = createServer(async (request, response) => {
+    let assetHandle;
+
     try {
       const assetPath = resolveAssetPath(webRoot, request.url ?? '/');
       if (assetPath === null) {
@@ -64,28 +72,27 @@ export async function startStaticServer(options) {
         return;
       }
 
-      const realAssetPath = await realpath(assetPath);
-      if (!isContained(webRoot, realAssetPath)) {
+      assetHandle = await openRegularAsset(webRoot, assetPath);
+      if (assetHandle === null) {
         respondNotFound(response);
         return;
       }
 
-      const assetStats = await lstat(realAssetPath);
-      if (!assetStats.isFile()) {
-        respondNotFound(response);
-        return;
-      }
-
-      response.writeHead(200, { 'Content-Type': contentTypeFor(realAssetPath) });
-      createReadStream(realAssetPath).pipe(response);
+      response.writeHead(200, { 'Content-Type': contentTypeFor(assetPath) });
+      await pipeline(assetHandle.createReadStream({ autoClose: false }), response);
     } catch (error) {
-      if (isNotFound(error)) {
-        respondNotFound(response);
-        return;
+      if (!response.headersSent) {
+        if (isNotFound(error)) {
+          respondNotFound(response);
+        } else {
+          response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+          response.end('Internal Server Error');
+        }
+      } else if (!response.destroyed) {
+        response.destroy();
       }
-
-      response.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-      response.end('Internal Server Error');
+    } finally {
+      await closeAssetHandle(assetHandle, response);
     }
   });
 
@@ -121,6 +128,67 @@ export async function startStaticServer(options) {
       return closePromise;
     },
   };
+}
+
+async function openRegularAsset(webRoot, assetPath) {
+  let assetHandle;
+
+  try {
+    const noFollow = constants.O_NOFOLLOW ?? 0;
+    assetHandle = await open(assetPath, constants.O_RDONLY | noFollow);
+    const assetStats = await assetHandle.stat();
+    if (!assetStats.isFile()) {
+      await assetHandle.close();
+      return null;
+    }
+
+    const openedPath = await resolveOpenedPath(assetHandle, assetPath, assetStats);
+    if (!isContained(webRoot, openedPath)) {
+      await assetHandle.close();
+      return null;
+    }
+
+    return assetHandle;
+  } catch (error) {
+    if (assetHandle !== undefined) {
+      await assetHandle.close().catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
+async function resolveOpenedPath(assetHandle, assetPath, assetStats) {
+  if (process.platform === 'linux') {
+    return realpath(`/proc/self/fd/${assetHandle.fd}`);
+  }
+
+  // O_NOFOLLOW prevents final-component symlinks where supported. On platforms
+  // without /proc, require the post-open path to identify the pinned descriptor.
+  const openedPath = await realpath(assetPath);
+  const pathHandle = await open(openedPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const pathStats = await pathHandle.stat();
+    if (assetStats.dev !== pathStats.dev || assetStats.ino !== pathStats.ino) {
+      throw Object.assign(new Error('Asset changed while opening'), { code: 'ENOENT' });
+    }
+  } finally {
+    await pathHandle.close();
+  }
+  return openedPath;
+}
+
+async function closeAssetHandle(assetHandle, response) {
+  if (assetHandle == null) {
+    return;
+  }
+
+  try {
+    await assetHandle.close();
+  } catch {
+    if (!response.destroyed) {
+      response.destroy();
+    }
+  }
 }
 
 function isContained(webRoot, assetPath) {
@@ -159,5 +227,9 @@ function isAddressInUse(error) {
 }
 
 function isNotFound(error) {
-  return error instanceof Error && 'code' in error && ['ENOENT', 'ENOTDIR'].includes(error.code);
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    ['EACCES', 'ELOOP', 'ENOENT', 'ENOTDIR'].includes(error.code)
+  );
 }

@@ -16,6 +16,7 @@ beforeEach(() => {
 
 afterEach(() => {
   removeAddedSignalListeners();
+  process.exitCode = undefined;
 });
 
 describe('run', () => {
@@ -65,7 +66,7 @@ describe('run', () => {
     expect(dependencies.stderr.write).toHaveBeenCalledWith(
       `Open this URL manually: ${dependencies.runningServer.url}\n`,
     );
-    expect(dependencies.runningServer.close).not.toHaveBeenCalled();
+    expect(dependencies.serverClose).not.toHaveBeenCalled();
   });
 
   test('startup failure rejects and does not call the browser opener', async () => {
@@ -85,25 +86,67 @@ describe('run', () => {
     await shutdown('SIGINT');
     await shutdown('SIGINT');
 
-    expect(dependencies.runningServer.close).toHaveBeenCalledOnce();
+    expect(dependencies.serverClose).toHaveBeenCalledOnce();
+  });
+
+  test('programmatic close removes both installed signal handlers', async () => {
+    const dependencies = createDependencies();
+    const running = await run([], dependencies);
+
+    await running?.close();
+
+    expect(addedSignalListenerOrUndefined('SIGINT')).toBeUndefined();
+    expect(addedSignalListenerOrUndefined('SIGTERM')).toBeUndefined();
+    expect(dependencies.serverClose).toHaveBeenCalledOnce();
+  });
+
+  test('opposite signal handlers share shutdown and are both removed', async () => {
+    const dependencies = createDependencies();
+    await run([], dependencies);
+    const interrupt = addedSignalListener('SIGINT');
+    const terminate = addedSignalListener('SIGTERM');
+
+    await Promise.all([interrupt('SIGINT'), terminate('SIGTERM')]);
+
+    expect(dependencies.serverClose).toHaveBeenCalledOnce();
+    expect(addedSignalListenerOrUndefined('SIGINT')).toBeUndefined();
+    expect(addedSignalListenerOrUndefined('SIGTERM')).toBeUndefined();
+  });
+
+  test('signal shutdown reports a rejected close without an unhandled rejection', async () => {
+    const dependencies = createDependencies();
+    dependencies.serverClose.mockRejectedValueOnce(new Error('close failed'));
+    await run([], dependencies);
+    const shutdown = addedSignalListener('SIGINT');
+
+    await expect(shutdown('SIGINT')).resolves.toBeUndefined();
+
+    expect(dependencies.stderr.write).toHaveBeenCalledWith(
+      'Failed to shut down PDF-Scrubber: close failed\n',
+    );
+    expect(process.exitCode).toBe(1);
+    expect(addedSignalListenerOrUndefined('SIGINT')).toBeUndefined();
+    expect(addedSignalListenerOrUndefined('SIGTERM')).toBeUndefined();
   });
 });
 
 function createDependencies() {
   const stdout = { write: vi.fn(() => true) };
   const stderr = { write: vi.fn(() => true) };
+  const serverClose = vi.fn(async () => undefined);
   const runningServer = {
     server: null,
     host: '127.0.0.1' as const,
     port: 61234,
     url: 'http://127.0.0.1:61234/',
-    close: vi.fn(async () => undefined),
+    close: serverClose,
   };
 
   return {
     stdout,
     stderr,
     runningServer,
+    serverClose,
     startServer: vi.fn(async () => runningServer),
     openBrowser: vi.fn(async () => undefined),
     packageVersion: '0.0.1-test',
@@ -111,13 +154,17 @@ function createDependencies() {
 }
 
 function addedSignalListener(signal: 'SIGINT' | 'SIGTERM') {
-  const listener = process
-    .listeners(signal)
-    .find((candidate) => !originalSignalListeners[signal].has(candidate));
+  const listener = addedSignalListenerOrUndefined(signal);
   if (listener === undefined) {
     throw new Error(`No ${signal} listener was installed`);
   }
   return listener;
+}
+
+function addedSignalListenerOrUndefined(signal: 'SIGINT' | 'SIGTERM') {
+  return process
+    .listeners(signal)
+    .find((candidate) => !originalSignalListeners[signal].has(candidate));
 }
 
 function removeAddedSignalListeners() {
