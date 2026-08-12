@@ -23,6 +23,7 @@ node_modules/
 **/.parcel-cache/
 dist/
 **/dist/
+apps/cli/dist/
 build/
 **/build/
 coverage/

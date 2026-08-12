@@ -1,0 +1,30 @@
+{
+  "name": "pdf-scrubber",
+  "version": "0.0.1",
+  "description": "Edit supported machine-readable PDF text locally in your browser.",
+  "license": "MIT",
+  "author": "DrTralala <drtralala@outlook.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DrTralala/PDF-Scrubber.git"
+  },
+  "homepage": "https://github.com/DrTralala/PDF-Scrubber#readme",
+  "bugs": {
+    "url": "https://github.com/DrTralala/PDF-Scrubber/issues"
+  },
+  "keywords": ["pdf", "editor", "browser", "local", "privacy"],
+  "type": "module",
+  "bin": {
+    "pdf-scrubber": "./bin/pdf-scrubber.js"
+  },
+  "files": ["bin/", "lib/", "dist/", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": "24.18.0"
+  },
+  "dependencies": {
+    "open": "11.0.0"
+  }
+}
