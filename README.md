@@ -1,6 +1,6 @@
 # PDF-Scrubber
 
-[![CI](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/ci.yml/badge.svg)](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/ci.yml)
+[![CI](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/verify.yml/badge.svg)](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/verify.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-24.18.0-339933.svg)](https://nodejs.org/)
 
