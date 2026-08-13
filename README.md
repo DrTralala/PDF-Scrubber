@@ -1,6 +1,7 @@
 # PDF-Scrubber
 
 [![CI](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/verify.yml/badge.svg)](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/verify.yml)
+[![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg?style=flat-square)](https://github.com/DrTralala/PDF-Scrubber/tree/v1.0.0)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-24.18.0-339933.svg)](https://nodejs.org/)
 
@@ -17,6 +18,12 @@ Run the published CLI without a permanent installation:
 
 ```bash
 npx pdf-scrubber@latest
+```
+
+For a reproducible stable release:
+
+```bash
+npx pdf-scrubber@1.0.0
 ```
 
 For an optional global installation:
