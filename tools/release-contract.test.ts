@@ -9,6 +9,15 @@ const execFileAsync = promisify(execFile);
 const projectRoot = resolve(import.meta.dirname, '..');
 const STABLE_RELEASE_CLAIM = /(?:\bstable\s+(?:v?\d+\.\d+\.\d+|release|version)|\bv?1\.0\.0\s+(?:is\s+)?(?:available|published|released)|\b(?:available|published|released)\s+as\s+\bv?1\.0\.0|\b(?:current\s+)?version\s+(?:is\s+)?v?1\.0\.0|\[!\[(?:npm\s+)?version\])/i;
 
+function expectInOrder(content: string, fragments: readonly string[]): void {
+  let offset = 0;
+  for (const fragment of fragments) {
+    const index = content.indexOf(fragment, offset);
+    expect(index, `Expected ${JSON.stringify(fragment)} after offset ${offset}`).toBeGreaterThanOrEqual(0);
+    offset = index + fragment.length;
+  }
+}
+
 test('root and CLI licence files are identical MIT licences', async () => {
   const [rootLicense, cliLicense] = await Promise.all([
     readFile(resolve(projectRoot, 'LICENSE')),
@@ -111,7 +120,7 @@ test('release verification and publication workflows are pinned and release-only
 
   expect(packageJson.scripts?.['verify:release']).toBe('sh scripts/verify.sh');
   expect(verifier).toContain('set -eu');
-  for (const command of [
+  expectInOrder(verifier, [
     'npm run build:fixtures',
     'npm run typecheck',
     'npm run test:unit',
@@ -120,11 +129,31 @@ test('release verification and publication workflows are pinned and release-only
     'npm run test:cli:smoke',
     'npm run test:web -- --full',
     'npm run test:m0',
-  ]) {
-    expect(verifier).toContain(command);
+  ]);
+  const verifierLines = verifier
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  for (const command of ['npm run test:web -- --full', 'npm run test:m0']) {
+    const gateIndex = verifierLines.indexOf(command);
+    expect(gateIndex, `${command} must have a preceding port check`).toBeGreaterThan(0);
+    expect(verifierLines[gateIndex - 1]).toBe('assert_port_5173_free');
+    expect(verifierLines[gateIndex + 1]).toBe('assert_port_5173_free');
   }
+  expect(verifierLines.filter((line) => line === 'assert_port_5173_free')).toHaveLength(4);
   expect(verifier).toContain("ss -ltn '( sport = :5173 )'");
   expect(verifier).toContain('## Decision: GO');
+
+  for (const workflow of [verifyWorkflow, publishWorkflow]) {
+    expect(workflow).toContain('runs-on: ubuntu-latest');
+    expect(workflow).toContain('contents: read');
+    expect(workflow).toContain("node-version: '24.18.0'");
+    expect(workflow).toContain('cache: npm');
+    expect(workflow).toContain('npm ci');
+    expect(workflow).toContain('npx playwright install --with-deps chromium');
+    expect(workflow).toContain('sudo apt-get install --no-install-recommends -y poppler-utils');
+    expect(workflow).toContain('npm run verify:release');
+  }
 
   expect(publishWorkflow).toContain('release:');
   expect(publishWorkflow).toContain('types: [published]');
@@ -133,6 +162,17 @@ test('release verification and publication workflows are pinned and release-only
   expect(publishWorkflow).toContain('!github.event.release.prerelease');
   expect(publishWorkflow).toContain('npm publish --workspace pdf-scrubber');
   expect(publishWorkflow).toContain('registry-url: https://registry.npmjs.org');
+  expect(publishWorkflow).toContain('group: publish-${{ github.event.release.tag_name }}');
+  expect(publishWorkflow).toContain('cancel-in-progress: false');
+  expect(publishWorkflow).toContain('ref: ${{ github.event.release.tag_name }}');
+  expectInOrder(publishWorkflow, [
+    'package_name=$(node -p "require(\'./apps/cli/package.json\').name")',
+    'package_version=$(node -p "require(\'./apps/cli/package.json\').version")',
+    'test "$RELEASE_TAG" = "v$package_version"',
+    'npm ci',
+    'npm run verify:release',
+    'npm publish --workspace pdf-scrubber',
+  ]);
   for (const forbidden of ['NPM_TOKEN', 'NODE_AUTH_TOKEN', 'pull_request_target']) {
     expect(publishWorkflow).not.toContain(forbidden);
   }

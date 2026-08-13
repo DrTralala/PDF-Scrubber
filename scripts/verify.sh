@@ -31,6 +31,7 @@ npm run test:cli:smoke
 assert_port_5173_free
 npm run test:web -- --full
 assert_port_5173_free
+assert_port_5173_free
 npm run test:m0
 assert_port_5173_free
 require_m0_go
