@@ -13,7 +13,7 @@ test('CLI workspace is the only publishable PDF-Scrubber package', async () => {
     version: '0.0.1',
     license: 'MIT',
     type: 'module',
-    bin: { 'pdf-scrubber': './bin/pdf-scrubber.js' },
+    bin: { 'pdf-scrubber': 'bin/pdf-scrubber.js' },
     publishConfig: { access: 'public' },
     engines: { node: '24.18.0' },
   });
