@@ -97,3 +97,54 @@ test('root and internal workspace packages remain private', async () => {
     expect(packageJson.private, packagePath).toBe(true);
   }
 });
+
+test('release verification and publication workflows are pinned and release-only', async () => {
+  const [verifyWorkflow, publishWorkflow, verifier, packageJsonText] = await Promise.all([
+    readFile(resolve(projectRoot, '.github/workflows/verify.yml'), 'utf8'),
+    readFile(resolve(projectRoot, '.github/workflows/publish.yml'), 'utf8'),
+    readFile(resolve(projectRoot, 'scripts/verify.sh'), 'utf8'),
+    readFile(resolve(projectRoot, 'package.json'), 'utf8'),
+  ]);
+  const packageJson = JSON.parse(packageJsonText) as {
+    scripts?: Record<string, string>;
+  };
+
+  expect(packageJson.scripts?.['verify:release']).toBe('sh scripts/verify.sh');
+  expect(verifier).toContain('set -eu');
+  for (const command of [
+    'npm run build:fixtures',
+    'npm run typecheck',
+    'npm run test:unit',
+    'npm run test:web:unit',
+    'npm run verify:package',
+    'npm run test:cli:smoke',
+    'npm run test:web -- --full',
+    'npm run test:m0',
+  ]) {
+    expect(verifier).toContain(command);
+  }
+  expect(verifier).toContain("ss -ltn '( sport = :5173 )'");
+  expect(verifier).toContain('## Decision: GO');
+
+  expect(publishWorkflow).toContain('release:');
+  expect(publishWorkflow).toContain('types: [published]');
+  expect(publishWorkflow).toContain('id-token: write');
+  expect(publishWorkflow).toContain('contents: read');
+  expect(publishWorkflow).toContain('!github.event.release.prerelease');
+  expect(publishWorkflow).toContain('npm publish --workspace pdf-scrubber');
+  expect(publishWorkflow).toContain('registry-url: https://registry.npmjs.org');
+  for (const forbidden of ['NPM_TOKEN', 'NODE_AUTH_TOKEN', 'pull_request_target']) {
+    expect(publishWorkflow).not.toContain(forbidden);
+  }
+  expect(publishWorkflow).not.toMatch(/^\s*push:/m);
+  expect(publishWorkflow).not.toMatch(/runs-on:\s*self-hosted/);
+
+  const actionReferences = [...`${verifyWorkflow}\n${publishWorkflow}`.matchAll(
+    /^\s*uses:\s*[^\s#]+@([^\s#]+)(?:\s+#\s*(v\S+))?\s*$/gm,
+  )];
+  expect(actionReferences.length).toBeGreaterThan(0);
+  for (const reference of actionReferences) {
+    expect(reference[1]).toMatch(/^[0-9a-f]{40}$/);
+    expect(reference[2]).toMatch(/^v\S+$/);
+  }
+});
