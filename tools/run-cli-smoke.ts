@@ -10,9 +10,8 @@ import {
   cleanupCliSmoke,
   resolveNpmCliPath,
   runWithCleanup,
-  terminateOwnedChild,
   waitForReadiness,
-  waitForOwnedChild,
+  waitForOwnedChildOrTerminate,
 } from './cli-smoke';
 
 const projectRoot = resolve(import.meta.dirname, '..');
@@ -80,15 +79,12 @@ await runWithCleanup(async () => {
     shell: false,
     stdio: 'inherit',
   });
-  let result;
-  try {
-    result = await waitForOwnedChild(childWithDrainedStdout(playwright), 120_000, 'Playwright');
-  } catch (error) {
-    await terminateOwnedChild(childWithDrainedStdout(playwright), {
-      forceSignalSupported: process.platform !== 'win32',
-    }).catch(() => undefined);
-    throw error;
-  }
+  const result = await waitForOwnedChildOrTerminate(
+    childWithDrainedStdout(playwright),
+    120_000,
+    'Playwright',
+    { forceSignalSupported: process.platform !== 'win32' },
+  );
   if (result.code !== 0) {
     throw new Error(`Packaged CLI smoke exited with status ${result.code}, signal ${result.signal}`);
   }

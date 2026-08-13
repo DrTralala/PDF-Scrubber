@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { posix, resolve } from 'node:path';
 
+import { parseAst } from 'vite';
+
 const FIXED_FILES = Object.freeze([
   'LICENSE',
   'README.md',
@@ -120,13 +122,17 @@ function referencedAssets(path: string, contents: string): readonly string[] {
 
 function htmlAssetReferences(contents: string): readonly string[] {
   const assets = new Set<string>();
+  // The package build emits ordinary start tags. Support quoted/unquoted src and
+  // href plus srcset candidates, while excluding HTML comments. Entity decoding
+  // below covers numeric references and the slash named reference needed to
+  // recognise browser-rooted /assets/ URLs.
   for (const tag of htmlStartTags(contents)) {
     for (const attribute of htmlAttributes(tag)) {
       if (attribute.name === 'src' || attribute.name === 'href') {
         addAssetReference(assets, decodeHtmlReferences(attribute.value));
       } else if (attribute.name === 'srcset') {
-        for (const candidate of decodeHtmlReferences(attribute.value).split(',')) {
-          addAssetReference(assets, candidate.trim().split(/\s+/, 1)[0] ?? '');
+        for (const candidate of srcsetCandidates(decodeHtmlReferences(attribute.value))) {
+          addAssetReference(assets, candidate);
         }
       }
     }
@@ -136,81 +142,29 @@ function htmlAssetReferences(contents: string): readonly string[] {
 
 function cssAssetReferences(contents: string): readonly string[] {
   const assets = new Set<string>();
-  const withoutComments = contents.replace(/\/\*[\s\S]*?\*\//g, '');
-  const url = /url\(\s*(?:"((?:\\.|[^"])*)"|'((?:\\.|[^'])*)'|([^\s)]*))\s*\)/gi;
-  for (const match of withoutComments.matchAll(url)) {
-    addAssetReference(assets, decodeCssEscapes(match[1] ?? match[2] ?? match[3] ?? ''));
-  }
-  const importString = /@import\s+(?:"((?:\\.|[^"])*)"|'((?:\\.|[^'])*)')/gi;
-  for (const match of withoutComments.matchAll(importString)) {
-    addAssetReference(assets, decodeCssEscapes(match[1] ?? match[2] ?? ''));
-  }
+  scanCssReferences(contents, assets);
   return [...assets];
 }
 
 function javascriptAssetReferences(contents: string): readonly string[] {
   const assets = new Set<string>();
-  const literals = javascriptStringLiterals(contents);
-  for (const literal of literals) {
-    addAssetReference(assets, decodeJavascriptEscapes(literal));
-  }
-  return [...assets];
-}
-
-function javascriptStringLiterals(contents: string): readonly string[] {
-  const literals: string[] = [];
-  let index = 0;
-  while (index < contents.length) {
-    const character = contents[index];
-    const next = contents[index + 1];
-    if (character === '/' && next === '/') {
-      index = contents.indexOf('\n', index + 2);
-      if (index === -1) break;
-      continue;
-    }
-    if (character === '/' && next === '*') {
-      index = contents.indexOf('*/', index + 2);
-      if (index === -1) break;
-      index += 2;
-      continue;
-    }
-    if (character === '/' && regexCanStartAfter(contents, index)) {
-      index = skipJavascriptRegex(contents, index);
-      continue;
-    }
-    if (character === '`') {
-      const template = readStaticTemplate(contents, index);
-      index = template.end;
-      if (template.value !== undefined) literals.push(template.value);
-      continue;
-    }
-    if (character !== '"' && character !== "'") {
-      index += 1;
-      continue;
-    }
-
-    const quote = character;
-    let value = '';
-    index += 1;
-    while (index < contents.length) {
-      const current = contents[index];
-      if (current === '\\' && index + 1 < contents.length) {
-        value += current + contents[index + 1];
-        index += 2;
-      } else if (current === quote) {
-        index += 1;
-        literals.push(value);
-        break;
-      } else if (current === '\n' || current === '\r') {
-        index += 1;
-        break;
-      } else {
-        value += current;
-        index += 1;
+  const root = parseAst(contents);
+  visitAst(root, (node) => {
+    if (node.type === 'Literal' && typeof node.value === 'string') {
+      addAssetReference(assets, node.value);
+    } else if (
+      node.type === 'TemplateLiteral'
+      && Array.isArray(node.expressions)
+      && node.expressions.length === 0
+      && Array.isArray(node.quasis)
+    ) {
+      const quasi = node.quasis[0];
+      if (isRecord(quasi) && isRecord(quasi.value) && typeof quasi.value.cooked === 'string') {
+        addAssetReference(assets, quasi.value.cooked);
       }
     }
-  }
-  return literals;
+  });
+  return [...assets];
 }
 
 function htmlStartTags(contents: string): readonly string[] {
@@ -277,68 +231,6 @@ function htmlAttributes(tag: string): readonly Readonly<{ name: string; value: s
   return attributes;
 }
 
-function regexCanStartAfter(contents: string, index: number): boolean {
-  let previous = index - 1;
-  while (previous >= 0 && /\s/.test(contents[previous] ?? '')) previous -= 1;
-  return previous < 0 || /[=(:,!&|?{};\[]/.test(contents[previous] ?? '');
-}
-
-function skipJavascriptRegex(contents: string, start: number): number {
-  let inClass = false;
-  let index = start + 1;
-  while (index < contents.length) {
-    const character = contents[index];
-    if (character === '\\') index += 2;
-    else if (character === '[') { inClass = true; index += 1; }
-    else if (character === ']') { inClass = false; index += 1; }
-    else if (character === '/' && !inClass) {
-      index += 1;
-      while (/[a-z]/i.test(contents[index] ?? '')) index += 1;
-      return index;
-    } else if (character === '\n' || character === '\r') return index + 1;
-    else index += 1;
-  }
-  return index;
-}
-
-function readStaticTemplate(
-  contents: string,
-  start: number,
-): Readonly<{ end: number; value?: string }> {
-  let value = '';
-  let index = start + 1;
-  while (index < contents.length) {
-    const character = contents[index];
-    if (character === '\\' && index + 1 < contents.length) {
-      value += character + contents[index + 1];
-      index += 2;
-    } else if (character === '`') {
-      return { end: index + 1, value };
-    } else if (character === '$' && contents[index + 1] === '{') {
-      return { end: skipTemplateWithExpressions(contents, index + 2) };
-    } else {
-      value += character;
-      index += 1;
-    }
-  }
-  return { end: index };
-}
-
-function skipTemplateWithExpressions(contents: string, index: number): number {
-  let braceDepth = 1;
-  while (index < contents.length) {
-    const character = contents[index];
-    if (character === '\\') index += 2;
-    else if (character === '{') { braceDepth += 1; index += 1; }
-    else if (character === '}') { braceDepth -= 1; index += 1; }
-    else if (character === '`' && braceDepth === 0) return index + 1;
-    else if (character === '`') {
-      index = readStaticTemplate(contents, index).end;
-    } else index += 1;
-  }
-  return index;
-}
-
 function addAssetReference(assets: Set<string>, decoded: string): void {
   if (!decoded.startsWith('/assets/')) return;
   const pathname = decoded.split(/[?#]/, 1)[0];
@@ -346,11 +238,7 @@ function addAssetReference(assets: Set<string>, decoded: string): void {
 }
 
 function decodeHtmlReferences(value: string): string {
-  return value.replace(/&(?:#(\d+)|#x([0-9a-f]+)|(?:sol));?/gi, (entity, decimal, hexadecimal) => {
-    if (hexadecimal !== undefined && !entity.endsWith(';')) {
-      const slashPrefix = hexadecimal.match(/^2f/i)?.[0];
-      if (slashPrefix !== undefined) return `/${hexadecimal.slice(slashPrefix.length)}`;
-    }
+  return value.replace(/&(?:#(\d+);?|#x([0-9a-f]+);?|sol;|sol(?![0-9a-z=]))/gi, (entity, decimal, hexadecimal) => {
     const point = decimal === undefined
       ? hexadecimal === undefined ? 0x2f : Number.parseInt(hexadecimal, 16)
       : Number.parseInt(decimal, 10);
@@ -366,20 +254,125 @@ function decodeCssEscapes(value: string): string {
   });
 }
 
-function decodeJavascriptEscapes(value: string): string {
-  return value.replace(
-    /\\(?:x([0-9a-f]{2})|u([0-9a-f]{4})|u\{([0-9a-f]{1,6})\}|([^\r\n]))/gi,
-    (escape, hexadecimal, unicode, codePoint, character) => {
-      const encoded = hexadecimal ?? unicode ?? codePoint;
-      if (encoded === undefined) return character ?? escape;
-      const point = Number.parseInt(encoded, 16);
-      return validCodePoint(point) ? String.fromCodePoint(point) : '\uFFFD';
-    },
-  );
-}
-
 function validCodePoint(value: number): boolean {
   return Number.isInteger(value) && value >= 0 && value <= 0x10ffff;
+}
+
+function srcsetCandidates(value: string): readonly string[] {
+  const candidates: string[] = [];
+  let index = 0;
+  while (index < value.length) {
+    while (index < value.length && /[\s,]/.test(value[index] ?? '')) index += 1;
+    const start = index;
+    while (index < value.length && !/\s/.test(value[index] ?? '')) index += 1;
+    if (index > start) {
+      const candidate = value.slice(start, index);
+      if (candidate.endsWith(',')) {
+        candidates.push(candidate.slice(0, -1));
+        continue;
+      }
+      candidates.push(candidate);
+    }
+    while (index < value.length && value[index] !== ',') index += 1;
+    if (value[index] === ',') index += 1;
+  }
+  return candidates;
+}
+
+function scanCssReferences(contents: string, assets: Set<string>): void {
+  let index = 0;
+  while (index < contents.length) {
+    if (contents.startsWith('/*', index)) {
+      const end = contents.indexOf('*/', index + 2);
+      index = end === -1 ? contents.length : end + 2;
+      continue;
+    }
+    const character = contents[index];
+    if (character === '"' || character === "'") {
+      index = readCssString(contents, index).end;
+      continue;
+    }
+    if (
+      cssTokenStartsAt(contents, index)
+      && contents.slice(index, index + 4).toLowerCase() === 'url('
+    ) {
+      const parsed = readCssUrl(contents, index + 4);
+      if (parsed.value !== undefined) addAssetReference(assets, decodeCssEscapes(parsed.value));
+      index = parsed.end;
+      continue;
+    }
+    if (
+      cssTokenStartsAt(contents, index)
+      && contents.slice(index, index + 7).toLowerCase() === '@import'
+    ) {
+      index += 7;
+      while (/\s/.test(contents[index] ?? '')) index += 1;
+      const quote = contents[index];
+      if (quote === '"' || quote === "'") {
+        const parsed = readCssString(contents, index);
+        addAssetReference(assets, decodeCssEscapes(parsed.value));
+        index = parsed.end;
+        continue;
+      }
+    }
+    index += 1;
+  }
+}
+
+function cssTokenStartsAt(contents: string, index: number): boolean {
+  return index === 0 || !/[a-z0-9_-]/i.test(contents[index - 1] ?? '');
+}
+
+function readCssString(contents: string, start: number): Readonly<{ end: number; value: string }> {
+  const quote = contents[start];
+  let value = '';
+  let index = start + 1;
+  while (index < contents.length) {
+    const character = contents[index];
+    if (character === '\\' && index + 1 < contents.length) {
+      value += character + contents[index + 1];
+      index += 2;
+    } else if (character === quote) {
+      return { end: index + 1, value };
+    } else {
+      value += character;
+      index += 1;
+    }
+  }
+  return { end: index, value };
+}
+
+function readCssUrl(
+  contents: string,
+  start: number,
+): Readonly<{ end: number; value?: string }> {
+  let index = start;
+  while (/\s/.test(contents[index] ?? '')) index += 1;
+  const quote = contents[index];
+  if (quote === '"' || quote === "'") {
+    const parsed = readCssString(contents, index);
+    index = parsed.end;
+    while (/\s/.test(contents[index] ?? '')) index += 1;
+    return { end: contents[index] === ')' ? index + 1 : index, value: parsed.value };
+  }
+  const valueStart = index;
+  while (index < contents.length && contents[index] !== ')') index += 1;
+  return { end: index < contents.length ? index + 1 : index, value: contents.slice(valueStart, index).trim() };
+}
+
+type AstNode = Readonly<Record<string, unknown> & { type: string }>;
+
+function visitAst(value: unknown, visitor: (node: AstNode) => void): void {
+  if (!isRecord(value)) return;
+  if (typeof value.type === 'string') visitor(value as AstNode);
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'parent') continue;
+    if (Array.isArray(child)) {
+      for (const item of child) visitAst(item, visitor);
+    } else {
+      visitAst(child, visitor);
+    }
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

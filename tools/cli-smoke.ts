@@ -112,10 +112,15 @@ export async function terminateOwnedChild(
   if (child.exitCode !== null || child.signalCode !== null) return;
   const gracefulTimeoutMs = options.gracefulTimeoutMs ?? 5_000;
   const forceTimeoutMs = options.forceTimeoutMs ?? 5_000;
-  const gracefulWait = waitForOwnedChild(child, gracefulTimeoutMs, 'owned CLI child');
-  if (!child.kill('SIGTERM')) throw new Error('Failed to signal owned CLI child');
+  const gracefulWait = createChildWaiter(child, gracefulTimeoutMs, 'owned CLI child');
+  if (!child.kill('SIGTERM')) {
+    const error = new Error('Failed to signal owned CLI child');
+    gracefulWait.cancel(error);
+    await gracefulWait.promise.catch(() => undefined);
+    throw error;
+  }
   try {
-    await gracefulWait;
+    await gracefulWait.promise;
     return;
   } catch (error) {
     if (!isTimeoutError(error)) throw error;
@@ -123,14 +128,19 @@ export async function terminateOwnedChild(
   if (options.forceSignalSupported === false) {
     throw new Error('Owned CLI child did not exit and forced termination is unsupported');
   }
-  const forceWait = waitForOwnedChild(
+  const forceWait = createChildWaiter(
     child,
     forceTimeoutMs,
     'owned CLI child after forced termination',
   );
-  if (!child.kill('SIGKILL')) throw new Error('Failed to force-terminate owned CLI child');
+  if (!child.kill('SIGKILL')) {
+    const error = new Error('Failed to force-terminate owned CLI child');
+    forceWait.cancel(error);
+    await forceWait.promise.catch(() => undefined);
+    throw error;
+  }
   try {
-    await forceWait;
+    await forceWait.promise;
   } catch (error) {
     if (isTimeoutError(error)) throw new Error('Owned CLI child did not exit after forced termination');
     throw error;
@@ -145,13 +155,52 @@ export function waitForOwnedChild(
   if (child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve({ code: child.exitCode, signal: child.signalCode });
   }
-  return new Promise((resolvePromise, reject) => {
+  return createChildWaiter(child, timeoutMs, name).promise;
+}
+
+export async function waitForOwnedChildOrTerminate(
+  child: OwnedChild,
+  timeoutMs: number,
+  name: string,
+  terminateOptions: Parameters<typeof terminateOwnedChild>[1] = {},
+): Promise<ChildResult> {
+  try {
+    return await waitForOwnedChild(child, timeoutMs, name);
+  } catch (waitError) {
+    try {
+      await terminateOwnedChild(child, terminateOptions);
+    } catch (terminationError) {
+      throw new AggregateError(
+        [waitError, terminationError],
+        `${name} wait and termination failed`,
+      );
+    }
+    throw waitError;
+  }
+}
+
+function createChildWaiter(
+  child: OwnedChild,
+  timeoutMs: number,
+  name: string,
+): Readonly<{
+  cancel(error: Error): void;
+  promise: Promise<ChildResult>;
+}> {
+  let cancel = (_error: Error): void => undefined;
+  const promise = new Promise<ChildResult>((resolvePromise, reject) => {
+    let settled = false;
     let lastError: Error | undefined;
-    const finish = (result: ChildResult): void => {
+    const clean = (): void => {
       clearTimeout(timer);
       child.off('close', onClose);
       child.off('error', onError);
       child.off('exit', onExit);
+    };
+    const finish = (result: ChildResult): void => {
+      if (settled) return;
+      settled = true;
+      clean();
       resolvePromise(result);
     };
     const onClose = (code: number | null, signal: NodeJS.Signals | null): void => {
@@ -162,9 +211,9 @@ export function waitForOwnedChild(
     };
     const onError = (error: Error): void => { lastError = error; };
     const timer = setTimeout(() => {
-      child.off('close', onClose);
-      child.off('error', onError);
-      child.off('exit', onExit);
+      if (settled) return;
+      settled = true;
+      clean();
       reject(new Error(
         `Timed out waiting for ${name}${lastError === undefined ? '' : ` after error: ${lastError.message}`}`,
       ));
@@ -172,7 +221,14 @@ export function waitForOwnedChild(
     child.once('close', onClose);
     child.once('error', onError);
     child.once('exit', onExit);
+    cancel = (error): void => {
+      if (settled) return;
+      settled = true;
+      clean();
+      reject(error);
+    };
   });
+  return { cancel, promise };
 }
 
 export async function assertUrlUnreachable(

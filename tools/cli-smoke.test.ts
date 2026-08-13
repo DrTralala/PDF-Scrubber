@@ -16,6 +16,7 @@ import {
   runWithCleanup,
   terminateOwnedChild,
   waitForOwnedChild,
+  waitForOwnedChildOrTerminate,
   waitForReadiness,
   type OwnedChild,
 } from './cli-smoke';
@@ -160,6 +161,62 @@ describe('CLI smoke process lifecycle', () => {
       forceSignalSupported: false,
       gracefulTimeoutMs: 5,
     })).rejects.toThrow('forced termination is unsupported');
+    expect(child.kill.mock.calls).toEqual([['SIGTERM']]);
+  });
+
+  test('cancels the waiter when signalling the exact child fails', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      child.kill.mockReturnValue(false);
+
+      await expect(terminateOwnedChild(child, {
+        gracefulTimeoutMs: 5_000,
+      })).rejects.toThrow('Failed to signal owned CLI child');
+
+      expect(child.kill.mock.calls).toEqual([['SIGTERM']]);
+      expect(child.listenerCount('close')).toBe(0);
+      expect(child.listenerCount('error')).toBe(0);
+      expect(child.listenerCount('exit')).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('aggregates a child wait timeout with exact-child termination failure', async () => {
+    const child = new FakeChild();
+    child.kill.mockReturnValue(false);
+
+    await expect(waitForOwnedChildOrTerminate(child, 5, 'Playwright', {
+      gracefulTimeoutMs: 5,
+    })).rejects.toMatchObject({ errors: [
+      expect.objectContaining({ message: 'Timed out waiting for Playwright' }),
+      expect.objectContaining({ message: 'Failed to signal owned CLI child' }),
+    ] });
+    expect(child.kill.mock.calls).toEqual([['SIGTERM']]);
+    expect(child.listenerCount('close')).toBe(0);
+    expect(child.listenerCount('error')).toBe(0);
+    expect(child.listenerCount('exit')).toBe(0);
+  });
+
+  test('reports exact-child termination failure while continuing aggregate cleanup', async () => {
+    const child = new FakeChild();
+    child.kill.mockReturnValue(false);
+    const events: string[] = [];
+
+    await expect(cleanupCliSmoke({
+      child,
+      readinessUrl: 'http://127.0.0.1:61234/',
+      temporaryRoot: '/tmp/opencode/owned-smoke',
+    }, {
+      removeTemporaryRoot: async () => { events.push('remove'); },
+      terminateChild: terminateOwnedChild,
+      verifyUnreachable: async () => { events.push('verify'); },
+    })).rejects.toMatchObject({ errors: [
+      expect.objectContaining({ message: 'Failed to signal owned CLI child' }),
+    ] });
+    expect(events).toEqual(['verify', 'remove']);
     expect(child.kill.mock.calls).toEqual([['SIGTERM']]);
   });
 

@@ -200,7 +200,7 @@ describe('assertBuiltAssetClosure', () => {
     {
       name: 'semicolonless HTML hexadecimal entity',
       file: 'dist/index.html',
-      contents: '<script src="&#x2fassets/missing-semicolon.js"></script>',
+      contents: '<script src="&#x2f&#97;ssets/missing-semicolon.js"></script>',
       missing: 'dist/assets/missing-semicolon.js',
     },
     {
@@ -268,6 +268,153 @@ describe('assertBuiltAssetClosure', () => {
       'dist/assets/app.js',
       'dist/assets/real-worker.js',
     ])).resolves.toBeUndefined();
+  });
+
+  test('uses JavaScript syntax so regex contexts cannot create asset literals', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': '',
+      'dist/assets/app.js': [
+        String.raw`function matcher() { return /["'\x60]\/assets\/regex-only\.js/; }`,
+        "const dynamic = `/assets/${(() => { const braces = \"}\"; return /[{\"']/; })()}.js`;",
+        'const worker = "/assets/real-worker.js";',
+      ].join('\n'),
+      'dist/assets/real-worker.js': 'postMessage("ready")',
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      'dist/assets/app.js',
+      'dist/assets/real-worker.js',
+    ])).resolves.toBeUndefined();
+  });
+
+  test('finds a static literal after a return-position regex containing quotes', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': '',
+      'dist/assets/app.js': [
+        String.raw`function matcher() { return /["']/; }`,
+        'const missing = "/assets/after-regex.js";',
+      ].join('\n'),
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      'dist/assets/app.js',
+    ])).rejects.toThrow('dist/assets/after-regex.js');
+  });
+
+  test('finds a static literal after a complex interpolated template', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': '',
+      'dist/assets/app.js': [
+        "const dynamic = `/assets/${(() => { const braces = \"}\"; return /[{\"']/; })()}.js`;",
+        'const missing = "/assets/after-template.js";',
+      ].join('\n'),
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      'dist/assets/app.js',
+    ])).rejects.toThrow('dist/assets/after-template.js');
+  });
+
+  test('walks literal nodes inside template expressions but ignores the dynamic template value', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': '',
+      'dist/assets/app.mjs': [
+        'const dynamic = `/assets/${pick("/assets/expression-worker.js")}.js`;',
+        'const staticTemplate = `/assets/static-worker.js`;',
+      ].join('\n'),
+      'dist/assets/expression-worker.js': 'postMessage("expression")',
+      'dist/assets/static-worker.js': 'postMessage("static")',
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      'dist/assets/app.mjs',
+      'dist/assets/expression-worker.js',
+      'dist/assets/static-worker.js',
+    ])).resolves.toBeUndefined();
+  });
+
+  test('checks static string literal nodes nested inside template expressions', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': '',
+      'dist/assets/app.mjs': 'const dynamic = `/assets/${pick("/assets/expression-missing.js")}.js`;',
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      'dist/assets/app.mjs',
+    ])).rejects.toThrow('dist/assets/expression-missing.js');
+  });
+
+  test('accepts no-whitespace CSS string imports and ignores URL text inside comments and strings', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': '',
+      'dist/assets/app.css': [
+        '@import"/assets/imported.css";',
+        '/* @import"/assets/commented.css"; */',
+        '.label::before { content: \'url("/assets/string-only.png")\'; }',
+        '.hero { background: url("/assets/background.png"); }',
+      ].join('\n'),
+      'dist/assets/imported.css': '',
+      'dist/assets/background.png': 'png',
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      'dist/assets/app.css',
+      'dist/assets/imported.css',
+      'dist/assets/background.png',
+    ])).resolves.toBeUndefined();
+  });
+
+  test('checks a no-whitespace CSS string import when the asset is omitted', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': '',
+      'dist/assets/app.css': '@import"/assets/missing-tight-import.css";',
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      'dist/assets/app.css',
+    ])).rejects.toThrow('dist/assets/missing-tight-import.css');
+  });
+
+  test('checks every srcset candidate while preserving commas inside local URLs', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': [
+        '<img srcset="/assets/image,wide.png 1x,',
+        ' &#47assets/missing-srcset.png 2x">',
+      ].join(''),
+      'dist/assets/image,wide.png': 'png',
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      'dist/assets/image,wide.png',
+    ])).rejects.toThrow('dist/assets/missing-srcset.png');
+  });
+
+  test('recognises a trailing comma as a srcset separator without a descriptor', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': '<img srcset="/assets/first.png, /assets/missing-second.png">',
+      'dist/assets/first.png': 'png',
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, [
+      ...fixedFiles,
+      'dist/assets/first.png',
+    ])).rejects.toThrow('dist/assets/missing-second.png');
+  });
+
+  test('does not decode a semicolonless named HTML entity followed by an ASCII letter', async () => {
+    const packageRoot = await createPackageRoot({
+      'dist/index.html': '<script src="&solassets/not-active.js"></script>',
+    });
+
+    await expect(assertBuiltAssetClosure(packageRoot, fixedFiles)).resolves.toBeUndefined();
   });
 });
 
