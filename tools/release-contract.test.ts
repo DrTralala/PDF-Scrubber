@@ -7,7 +7,7 @@ import { expect, test } from 'vitest';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = resolve(import.meta.dirname, '..');
-const STABLE_RELEASE_CLAIM = /(?:\bstable\s+(?:v?\d+\.\d+\.\d+|release|version)|\bv?1\.0\.0\s+(?:is\s+)?(?:available|published|released)|\b(?:available|published|released)\s+as\s+\bv?1\.0\.0|\bversion\s+v?1\.0\.0|\[!\[version\])/i;
+const STABLE_RELEASE_CLAIM = /(?:\bstable\s+(?:v?\d+\.\d+\.\d+|release|version)|\bv?1\.0\.0\s+(?:is\s+)?(?:available|published|released)|\b(?:available|published|released)\s+as\s+\bv?1\.0\.0|\b(?:current\s+)?version\s+(?:is\s+)?v?1\.0\.0|\[!\[(?:npm\s+)?version\])/i;
 
 test('root and CLI licence files are identical MIT licences', async () => {
   const [rootLicense, cliLicense] = await Promise.all([
@@ -37,6 +37,13 @@ test('stable release guard rejects deferred v1.0.0 claims while allowing generic
   const allowedPreReleaseReadme = 'Install with `npx pdf-scrubber@latest`; the version badge is deferred.';
 
   expect(allowedPreReleaseReadme).not.toMatch(STABLE_RELEASE_CLAIM);
+  for (const allowedText of [
+    'Requires Node.js 24.18.0.',
+    '{"name":"pdf-scrubber","version":"0.0.1"}',
+    'Version-specific release metadata is intentionally deferred.',
+  ]) {
+    expect(allowedText).not.toMatch(STABLE_RELEASE_CLAIM);
+  }
   for (const claim of [
     'Stable v1.0.0.',
     'Stable version 1.0.0 is next.',
@@ -45,6 +52,8 @@ test('stable release guard rejects deferred v1.0.0 claims while allowing generic
     'Version 1.0.0 has been released.',
     'Available as v1.0.0.',
     '[![Version](https://img.shields.io/npm/v/pdf-scrubber.svg)](https://www.npmjs.com/package/pdf-scrubber)',
+    '[![npm version](https://img.shields.io/npm/v/pdf-scrubber.svg)](https://www.npmjs.com/package/pdf-scrubber)',
+    'Current version is 1.0.0.',
   ]) {
     expect(claim).toMatch(STABLE_RELEASE_CLAIM);
   }
