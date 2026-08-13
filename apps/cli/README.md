@@ -8,7 +8,7 @@ It is designed to keep document and font processing in the browser.
 Run the CLI without a permanent installation:
 
 ```bash
-npx pdf-scrubber
+npx pdf-scrubber@latest
 ```
 
 For an optional global installation:
@@ -23,7 +23,8 @@ only. It uses port 5173 by default and selects a fallback port when that port
 is unavailable. Press Ctrl-C to shut the server down.
 
 PDF and font processing remains local to the browser; document and font bytes
-are not uploaded to a server.
+are not uploaded to a server. The GitHub source is private; this package README
+documents the public npm interface only.
 
 The CLI runtime is being assembled incrementally; this package version
 establishes its public npm package boundary and metadata.

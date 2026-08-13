@@ -164,9 +164,8 @@ export function FontUploadControl({
         </>
       ) : localAvailability === 'insecure-context' ? (
         <p>
-          Local Font Access requires HTTPS or http://localhost:5173. If PDF-Scrubber is running in
-          WSL, open the localhost URL instead of the WSL network address. Upload remains
-          available.
+          Local Font Access requires HTTPS or a localhost URL. If PDF-Scrubber is running in WSL,
+          open the printed loopback URL instead of a LAN or network URL. Upload remains available.
         </p>
       ) : (
         <p>
