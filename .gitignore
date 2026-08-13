@@ -1,6 +1,15 @@
 # Local OpenCode and planning state
 opencode.json
-.opencode/
+.opencode/*
+!.opencode/commands/
+.opencode/commands/*
+!.opencode/commands/release.md
+!.opencode/skills/
+.opencode/skills/*
+!.opencode/skills/pdf-scrubber-release/
+!.opencode/skills/pdf-scrubber-release/**
+!.opencode/skills/pdf-scrubber-run-validate/
+!.opencode/skills/pdf-scrubber-run-validate/**
 .superpowers/
 docs/
 
