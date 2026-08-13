@@ -32,5 +32,6 @@ PDF and font processing remains local to the browser; document and font bytes
 are not uploaded to a server. The GitHub source is private; this package README
 documents the public npm interface only.
 
-This package is available as `pdf-scrubber@1.0.0`. The browser editor performs
-PDF and font processing locally after the CLI starts the local server.
+The reproducible command above is pinned to `pdf-scrubber@1.0.0`. The browser
+editor performs PDF and font processing locally after the CLI starts the local
+server.
