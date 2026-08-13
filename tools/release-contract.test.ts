@@ -18,6 +18,86 @@ function expectInOrder(content: string, fragments: readonly string[]): void {
   }
 }
 
+function markdownSection(content: string, heading: string): string {
+  const start = content.indexOf(heading);
+  expect(start, `Expected Markdown heading ${JSON.stringify(heading)}`).toBeGreaterThanOrEqual(0);
+  const nextHeading = content.indexOf('\n## ', start + heading.length);
+  return content.slice(start, nextHeading < 0 ? undefined : nextHeading);
+}
+
+function numberedMarkdownItems(section: string): string[] {
+  const items: string[] = [];
+  for (const line of section.split(/\r?\n/)) {
+    if (/^\d+\. /.test(line)) {
+      items.push(line);
+    } else if (items.length > 0) {
+      items[items.length - 1] += `\n${line}`;
+    }
+  }
+  return items;
+}
+
+function expectSafeReleasePolicy(skill: string): void {
+  const prohibitionText = skill
+    .split(/\r?\n/)
+    .filter((line) => /^- (?:Never|Do not|Must not)\b/i.test(line))
+    .join('\n');
+  const guardedOperations = [
+    { operation: 'force push', prohibition: /force push/i },
+    { operation: 'history rewrite', prohibition: /history rewrite|rewrite history/i },
+    { operation: 'ordinary local `npm publish`', prohibition: /ordinary local `npm publish`/i },
+    { operation: 'NPM_TOKEN', prohibition: /NPM_TOKEN/ },
+    { operation: 'NODE_AUTH_TOKEN', prohibition: /NODE_AUTH_TOKEN/ },
+    { operation: 'version reuse', prohibition: /version reuse/i },
+  ];
+  const textOutsideProhibitions = skill
+    .split(/\r?\n/)
+    .filter((line) => !/^- (?:Never|Do not|Must not)\b/i.test(line))
+    .join('\n');
+  for (const { operation, prohibition } of guardedOperations) {
+    expect(prohibitionText, `${operation} must be inside an explicit prohibition`)
+      .toMatch(prohibition);
+    expect(textOutsideProhibitions, `${operation} must not also be permitted`).not.toMatch(
+      new RegExp(`\\b(?:may|can|allow|permit)\\b[^\\n.]*${operation.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'),
+    );
+  }
+
+  const confirmationInstructions = [...skill.matchAll(
+    /\b(?:ask|request)\b[^\n.]*\bexplicit confirmation\b/gi,
+  )];
+  expect(confirmationInstructions, 'Exactly one instruction must ask for explicit confirmation')
+    .toHaveLength(1);
+
+  const publishItems = numberedMarkdownItems(markdownSection(skill, '## Phase 2: Publish'));
+  const transitionIndex = publishItems.findIndex((item) => item.includes('gh release create v<version>'));
+  expect(transitionIndex, 'Expected an irreversible GitHub Release transition').toBeGreaterThan(0);
+  const immediateGate = publishItems[transitionIndex - 1] ?? '';
+  expect(immediateGate).toMatch(/\b(?:ask|request)\b[^\n.]*\bexplicit confirmation\b/i);
+  expect(immediateGate).toMatch(/clean worktree/i);
+  expect(immediateGate).toMatch(/release SHA[\s\S]*(?:equals|matches)[\s\S]*HEAD/i);
+  expect(immediateGate).toMatch(/release SHA[\s\S]*(?:equals|matches)[\s\S]*upstream `?main`?/i);
+  expect(immediateGate).toMatch(/(?:expected )?tag[\s\S]*(?:absent|does not exist)/i);
+  expect(immediateGate).toMatch(/npm[\s\S]*(?:version|package version)[\s\S]*(?:absent|does not exist)/i);
+  expect(immediateGate).toMatch(/exact-SHA `Verify`[\s\S]*still accepted/i);
+
+  const publishSection = markdownSection(skill, '## Phase 2: Publish');
+  expect(publishSection).toMatch(/mktemp[^\n]*\/tmp/i);
+  expect(publishSection).toMatch(/outside (?:the )?checkout/i);
+  expect(publishSection).toMatch(/trap[^\n]*rm -f/i);
+}
+
+async function expectIgnored(path: string, ignored: boolean): Promise<void> {
+  try {
+    await execFileAsync('git', ['check-ignore', '--quiet', '--no-index', path], {
+      cwd: projectRoot,
+    });
+    expect(ignored, `${path} is ignored`).toBe(true);
+  } catch (error) {
+    expect(error, `${path} must produce the expected check-ignore status`).toMatchObject({ code: 1 });
+    expect(ignored, `${path} is not ignored`).toBe(false);
+  }
+}
+
 test('root and CLI licence files are identical MIT licences', async () => {
   const [rootLicense, cliLicense] = await Promise.all([
     readFile(resolve(projectRoot, 'LICENSE')),
@@ -193,11 +273,21 @@ test('only approved project-local OpenCode release automation is trackable', asy
   const approvedPaths = [
     '.opencode/commands/release.md',
     '.opencode/skills/pdf-scrubber-release/SKILL.md',
+    '.opencode/skills/pdf-scrubber-release/references/future-release-check.md',
     '.opencode/skills/pdf-scrubber-run-validate/SKILL.md',
+    '.opencode/skills/pdf-scrubber-run-validate/references/agent-browser-walkthrough.md',
     '.opencode/skills/pdf-scrubber-run-validate/references/automated-checks.md',
+    '.opencode/skills/pdf-scrubber-run-validate/references/troubleshooting.md',
     '.opencode/skills/pdf-scrubber-run-validate/scripts/reject-validation.js',
   ];
   const localOnlyPaths = [
+    '.opencode/commands/test.md',
+    '.opencode/skills/unapproved/SKILL.md',
+    '.opencode/skills/pdf-scrubber-release-sibling/SKILL.md',
+    '.opencode/skills/pdf-scrubber-run-validate-sibling/SKILL.md',
+    '.opencode/agents/release.md',
+    '.opencode/opencode.json',
+    '.opencode/tools/release.ts',
     '.opencode/package.json',
     '.opencode/package-lock.json',
     '.opencode/bun.lock',
@@ -208,14 +298,10 @@ test('only approved project-local OpenCode release automation is trackable', asy
   ];
 
   for (const path of approvedPaths) {
-    await expect(execFileAsync('git', ['check-ignore', '--quiet', '--no-index', path], {
-      cwd: projectRoot,
-    }), path).rejects.toMatchObject({ code: 1 });
+    await expectIgnored(path, false);
   }
   for (const path of localOnlyPaths) {
-    await expect(execFileAsync('git', ['check-ignore', '--quiet', '--no-index', path], {
-      cwd: projectRoot,
-    }), path).resolves.toBeDefined();
+    await expectIgnored(path, true);
   }
 });
 
@@ -256,16 +342,41 @@ test('release skill enforces preparation, publication, and post-release contract
   expect(skill).toMatch(/npm view[\s\S]*clean installed-package smoke/i);
   expect(skill).toMatch(/0\.0\.1[\s\S]*one-time release plan/i);
 
-  for (const forbidden of [
-    /force push/i,
-    /history rewrite/i,
-    /ordinary local `npm publish`/i,
-    /NPM_TOKEN/,
-    /NODE_AUTH_TOKEN/,
-    /version reuse/i,
+  expectSafeReleasePolicy(skill);
+});
+
+test('release safety policy rejects permissive, duplicate, and misplaced gates', async () => {
+  const skill = await readFile(resolve(
+    projectRoot,
+    '.opencode/skills/pdf-scrubber-release/SKILL.md',
+  ), 'utf8');
+  const duplicateConfirmation = skill.replace(
+    '## Required report',
+    'Ask for another explicit confirmation after publication.\n\n## Required report',
+  );
+  const misplacedConfirmation = skill
+    .replace('Ask one explicit confirmation', 'Record the publication decision')
+    .replace(
+      '## Required report',
+      'Ask for one explicit confirmation after publication.\n\n## Required report',
+    );
+
+  for (const operation of [
+    'force push',
+    'history rewrite',
+    'version reuse',
+    'NPM_TOKEN',
+    'NODE_AUTH_TOKEN',
+    'ordinary local `npm publish`',
   ]) {
-    expect(skill).toMatch(forbidden);
+    const permissive = skill.replace(
+      '## Phase 1: Prepare',
+      `You may ${operation}.\n\n## Phase 1: Prepare`,
+    );
+    expect(() => expectSafeReleasePolicy(permissive), operation).toThrow();
   }
+  expect(() => expectSafeReleasePolicy(duplicateConfirmation)).toThrow();
+  expect(() => expectSafeReleasePolicy(misplacedConfirmation)).toThrow();
 });
 
 test('tracked project policy test has no clean-checkout dependency on ignored runtime files', async () => {
