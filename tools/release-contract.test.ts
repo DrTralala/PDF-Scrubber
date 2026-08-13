@@ -109,9 +109,18 @@ test('root and CLI licence files are identical MIT licences', async () => {
 });
 
 test('root README exposes release-safe badges and npm usage guidance', async () => {
-  const readme = await readFile(resolve(projectRoot, 'README.md'), 'utf8');
+  const [readme, workflowFiles] = await Promise.all([
+    readFile(resolve(projectRoot, 'README.md'), 'utf8'),
+    readdir(resolve(projectRoot, '.github/workflows')),
+  ]);
+  const workflowBadge = readme.match(
+    /^\[!\[CI\]\(https:\/\/github\.com\/DrTralala\/PDF-Scrubber\/actions\/workflows\/([^/)]+)\/badge\.svg\)\]\(https:\/\/github\.com\/DrTralala\/PDF-Scrubber\/actions\/workflows\/([^/)]+)\)$/m,
+  );
 
-  expect(readme).toMatch(/^\[!\[CI\]\(.*actions\/workflows\/.*\/badge\.svg.*\)$/m);
+  expect(workflowBadge).not.toBeNull();
+  expect(workflowBadge?.[1]).toBe('verify.yml');
+  expect(workflowBadge?.[2]).toBe(workflowBadge?.[1]);
+  expect(workflowFiles).toContain(workflowBadge?.[1]);
   expect(readme).toMatch(/^\[!\[License: MIT\]\(.*\)$/m);
   expect(readme).toMatch(/^\[!\[Node\.js\]\(.*\)$/m);
   expect(readme).not.toMatch(STABLE_RELEASE_CLAIM);
@@ -228,13 +237,11 @@ test('release verification and publication workflows are pinned and release-only
     expect(workflow).toContain('runs-on: ubuntu-latest');
     expect(workflow).toContain('contents: read');
     expect(workflow).toContain("node-version: '24.18.0'");
-    expect(workflow).toContain('cache: npm');
     expect(workflow).toContain('npm ci');
     expect(workflow).toContain('npx playwright install --with-deps chromium');
     expect(workflow).toContain('sudo apt-get install --no-install-recommends -y poppler-utils');
     expect(workflow).toContain('npm run verify:release');
   }
-
   expect(publishWorkflow).toContain('release:');
   expect(publishWorkflow).toContain('types: [published]');
   expect(publishWorkflow).toContain('id-token: write');
@@ -267,6 +274,36 @@ test('release verification and publication workflows are pinned and release-only
     expect(reference[1]).toMatch(/^[0-9a-f]{40}$/);
     expect(reference[2]).toMatch(/^v\S+$/);
   }
+});
+
+test('Verify uses the npm cache while Publish disables package-manager caching', async () => {
+  const [verifyWorkflow, publishWorkflow] = await Promise.all([
+    readFile(resolve(projectRoot, '.github/workflows/verify.yml'), 'utf8'),
+    readFile(resolve(projectRoot, '.github/workflows/publish.yml'), 'utf8'),
+  ]);
+
+  expect(verifyWorkflow).toContain('cache: npm');
+  expect(publishWorkflow).not.toMatch(/^\s*cache:/m);
+  expect(publishWorkflow).not.toMatch(/^\s*uses:\s*actions\/cache@/m);
+});
+
+test('Publish proves the checked-out release tag commit before version checks', async () => {
+  const publishWorkflow = await readFile(
+    resolve(projectRoot, '.github/workflows/publish.yml'),
+    'utf8',
+  );
+
+  expect(publishWorkflow).toMatch(
+    /ref: \$\{\{ github\.event\.release\.tag_name \}\}\n\s+- name: Verify release target SHA\n\s+run: \|\n\s+checked_out_sha=\$\(git rev-parse HEAD\)\n\s+release_tag_sha=\$\(git rev-parse "refs\/tags\/\$RELEASE_TAG\^\{commit\}"\)\n\s+test "\$checked_out_sha" = "\$release_tag_sha"/,
+  );
+  expectInOrder(publishWorkflow, [
+    'checked_out_sha=$(git rev-parse HEAD)',
+    'release_tag_sha=$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")',
+    'test "$checked_out_sha" = "$release_tag_sha"',
+    'package_name=$(node -p "require(\'./apps/cli/package.json\').name")',
+    'test "$RELEASE_TAG" = "v$package_version"',
+    'npm publish --workspace pdf-scrubber',
+  ]);
 });
 
 test('only approved project-local OpenCode release automation is trackable', async () => {
