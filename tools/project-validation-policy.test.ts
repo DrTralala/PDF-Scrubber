@@ -3,8 +3,10 @@ import { resolve } from 'node:path';
 
 import { expect, test } from 'vitest';
 
-import * as projectValidationPolicyPlugin from '../.opencode/plugins/project-validation-policy';
-import { PROJECT_VALIDATION_BASH_ENTRIES } from './project-validation-policy';
+import {
+  PROJECT_VALIDATION_BASH_ENTRIES,
+  applyProjectValidationBashPolicy,
+} from './project-validation-policy';
 
 type JsonObject = Record<string, unknown>;
 
@@ -75,14 +77,8 @@ function asJsonObject(value: unknown, label: string): JsonObject {
   return value as JsonObject;
 }
 
-test('project OpenCode config asks by default and narrowly allows validation commands', async () => {
-  const config = JSON.parse(await readFile(resolve(projectRoot, 'opencode.json'), 'utf8')) as JsonObject;
-  expect(Object.keys(config)).toEqual(['$schema', 'permission']);
-  expect(config.$schema).toBe('https://opencode.ai/config.json');
-
-  const permission = asJsonObject(config.permission, 'OpenCode permission');
-  expect(Object.keys(permission)).toEqual(['bash']);
-  const bash = asJsonObject(permission.bash, 'OpenCode Bash permission');
+test('project OpenCode policy asks by default and narrowly allows validation commands', () => {
+  const bash = Object.fromEntries(PROJECT_VALIDATION_BASH_ENTRIES);
   const expectedAllowedPatterns = EXPECTED_BASH_ENTRIES
     .filter(([, action]) => action === 'allow')
     .map(([pattern]) => pattern);
@@ -97,10 +93,8 @@ test('project OpenCode config asks by default and narrowly allows validation com
   expect(Object.entries(bash).slice(-2)).toEqual([['*<*', 'ask'], ['*>*', 'ask']]);
 });
 
-test('effective merged Bash policy resets inherited allows before project validation allows', async () => {
-  const config = JSON.parse(await readFile(resolve(projectRoot, 'opencode.json'), 'utf8')) as JsonObject;
-  const permission = asJsonObject(config.permission, 'OpenCode permission');
-  const projectBash = asJsonObject(permission.bash, 'OpenCode Bash permission');
+test('effective merged Bash policy resets inherited allows before project validation allows', () => {
+  const projectBash = Object.fromEntries(PROJECT_VALIDATION_BASH_ENTRIES);
   const inheritedBash = {
     '*': 'allow',
     'agent-browser *': 'allow',
@@ -127,10 +121,7 @@ test('effective merged Bash policy resets inherited allows before project valida
       bash: mergedBash,
     },
   };
-  expect(Object.keys(projectValidationPolicyPlugin)).toEqual(['default']);
-  const hooks = await projectValidationPolicyPlugin.default({} as never);
-  if (hooks.config === undefined) throw new Error('Project validation policy has no config hook');
-  await hooks.config(effectiveConfig as never);
+  applyProjectValidationBashPolicy(effectiveConfig);
   const effectivePermission = asJsonObject(effectiveConfig.permission, 'effective permission');
   const effectiveBash = asJsonObject(effectivePermission.bash, 'effective Bash permission');
   const effectiveEntries = Object.entries(effectiveBash) as [string, BashAction][];

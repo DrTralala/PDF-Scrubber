@@ -188,3 +188,92 @@ test('release verification and publication workflows are pinned and release-only
     expect(reference[2]).toMatch(/^v\S+$/);
   }
 });
+
+test('only approved project-local OpenCode release automation is trackable', async () => {
+  const approvedPaths = [
+    '.opencode/commands/release.md',
+    '.opencode/skills/pdf-scrubber-release/SKILL.md',
+    '.opencode/skills/pdf-scrubber-run-validate/SKILL.md',
+    '.opencode/skills/pdf-scrubber-run-validate/references/automated-checks.md',
+    '.opencode/skills/pdf-scrubber-run-validate/scripts/reject-validation.js',
+  ];
+  const localOnlyPaths = [
+    '.opencode/package.json',
+    '.opencode/package-lock.json',
+    '.opencode/bun.lock',
+    '.opencode/node_modules/example.js',
+    '.opencode/plugins/project-validation-policy.ts',
+    'opencode.json',
+    'docs/example.md',
+  ];
+
+  for (const path of approvedPaths) {
+    await expect(execFileAsync('git', ['check-ignore', '--quiet', '--no-index', path], {
+      cwd: projectRoot,
+    }), path).rejects.toMatchObject({ code: 1 });
+  }
+  for (const path of localOnlyPaths) {
+    await expect(execFileAsync('git', ['check-ignore', '--quiet', '--no-index', path], {
+      cwd: projectRoot,
+    }), path).resolves.toBeDefined();
+  }
+});
+
+test('release command delegates one explicit semver argument to the release skill', async () => {
+  const command = await readFile(resolve(projectRoot, '.opencode/commands/release.md'), 'utf8');
+
+  expect(command).toMatch(/^---\ndescription: .+\nagent: build\n---\n/);
+  expect(command).toContain('$ARGUMENTS');
+  expect(command).toMatch(/exactly one positional argument/i);
+  expect(command).toMatch(/semantic version|semver/i);
+  expect(command).toMatch(/before (?:running any command|any edit)/i);
+  expect(command).toMatch(/invoke (?:the )?`?pdf-scrubber-release`?/i);
+  expect(command).toMatch(/pass `?\$ARGUMENTS`? verbatim/i);
+});
+
+test('release skill enforces preparation, publication, and post-release contracts', async () => {
+  const skill = await readFile(resolve(
+    projectRoot,
+    '.opencode/skills/pdf-scrubber-release/SKILL.md',
+  ), 'utf8');
+
+  expect(skill).toMatch(/^---\nname: pdf-scrubber-release\ndescription: Use when .+\n---\n/);
+  expect(skill).toMatch(/clean, synchronised[\s\S]*`main`/i);
+  expect(skill).toMatch(/tag[\s\S]*npm[\s\S]*(?:absent|does not exist)/i);
+  expect(skill).toContain('apps/cli/package.json');
+  expect(skill).toMatch(/package-lock\.json/);
+  expect(skill).toMatch(/README[\s\S]*(?:badge|pinned)/i);
+  expect(skill).toContain('npm run verify:release');
+  expect(skill).toMatch(/SHA[\s\S]*tree[\s\S]*(?:stable|unchanged)/i);
+  expect(skill).toMatch(/exact-SHA `Verify`/);
+  expect(skill).toMatch(/complete release notes/i);
+  expect(skill).toMatch(/preview[\s\S]*explicit confirmation/i);
+  expect(skill).toContain(
+    'gh release create v<version> --target <sha> --title v<version> --notes-file <temporary-file>',
+  );
+  expect(skill).toMatch(/remove[\s\S]*temporary notes file/i);
+  expect(skill).toMatch(/release-triggered[\s\S]*exact (?:release )?(?:target )?SHA/i);
+  expect(skill).toMatch(/npm view[\s\S]*clean installed-package smoke/i);
+  expect(skill).toMatch(/0\.0\.1[\s\S]*one-time release plan/i);
+
+  for (const forbidden of [
+    /force push/i,
+    /history rewrite/i,
+    /ordinary local `npm publish`/i,
+    /NPM_TOKEN/,
+    /NODE_AUTH_TOKEN/,
+    /version reuse/i,
+  ]) {
+    expect(skill).toMatch(forbidden);
+  }
+});
+
+test('tracked project policy test has no clean-checkout dependency on ignored runtime files', async () => {
+  const policyTest = await readFile(resolve(projectRoot, 'tools/project-validation-policy.test.ts'), 'utf8');
+
+  expect(policyTest).not.toContain("../.opencode/plugins/project-validation-policy");
+  expect(policyTest).not.toMatch(/readFile\([^)]*opencode\.json/s);
+  expect(policyTest).toMatch(
+    /import \{\s*PROJECT_VALIDATION_BASH_ENTRIES,\s*applyProjectValidationBashPolicy,?\s*\} from '\.\/project-validation-policy';/,
+  );
+});
