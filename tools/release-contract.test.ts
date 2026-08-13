@@ -7,6 +7,7 @@ import { expect, test } from 'vitest';
 
 const execFileAsync = promisify(execFile);
 const projectRoot = resolve(import.meta.dirname, '..');
+const STABLE_RELEASE_CLAIM = /(?:\bstable\s+(?:v?\d+\.\d+\.\d+|release|version)|\bv?1\.0\.0\s+(?:is\s+)?(?:available|published|released)|\b(?:available|published|released)\s+as\s+\bv?1\.0\.0|\bversion\s+v?1\.0\.0|\[!\[version\])/i;
 
 test('root and CLI licence files are identical MIT licences', async () => {
   const [rootLicense, cliLicense] = await Promise.all([
@@ -24,12 +25,39 @@ test('root README exposes release-safe badges and npm usage guidance', async () 
   expect(readme).toMatch(/^\[!\[CI\]\(.*actions\/workflows\/.*\/badge\.svg.*\)$/m);
   expect(readme).toMatch(/^\[!\[License: MIT\]\(.*\)$/m);
   expect(readme).toMatch(/^\[!\[Node\.js\]\(.*\)$/m);
-  expect(readme).not.toMatch(/stable release|stable version/i);
+  expect(readme).not.toMatch(STABLE_RELEASE_CLAIM);
   expect(readme).toContain('npx pdf-scrubber@latest');
   expect(readme).toMatch(/^## Source development \(authorised contributors\)$/m);
   expect(readme).toMatch(/## Source development \(authorised contributors\)[\s\S]*npm ci[\s\S]*npm start/);
   expect(readme).toMatch(/loopback-only serving/i);
   expect(readme).toMatch(/port 5173.*fallback/i);
+});
+
+test('stable release guard rejects deferred v1.0.0 claims while allowing generic npm guidance', () => {
+  const allowedPreReleaseReadme = 'Install with `npx pdf-scrubber@latest`; the version badge is deferred.';
+
+  expect(allowedPreReleaseReadme).not.toMatch(STABLE_RELEASE_CLAIM);
+  for (const claim of [
+    'Stable v1.0.0.',
+    'Stable version 1.0.0 is next.',
+    'Stable v1.0.0 is available.',
+    'v1.0.0 is available on npm.',
+    'Version 1.0.0 has been released.',
+    'Available as v1.0.0.',
+    '[![Version](https://img.shields.io/npm/v/pdf-scrubber.svg)](https://www.npmjs.com/package/pdf-scrubber)',
+  ]) {
+    expect(claim).toMatch(STABLE_RELEASE_CLAIM);
+  }
+});
+
+test('CLI README preserves runnable usage and avoids stale assembly wording', async () => {
+  const packageReadme = await readFile(resolve(projectRoot, 'apps/cli/README.md'), 'utf8');
+
+  expect(packageReadme).toContain('npx pdf-scrubber@latest');
+  expect(packageReadme).toMatch(/loopback[\s\S]*port 5173[\s\S]*fallback[\s\S]*Ctrl-C/);
+  expect(packageReadme).toMatch(/PDF and font processing remains local to the browser/);
+  expect(packageReadme).not.toMatch(/being assembled incrementally|only package boundary and metadata/i);
+  expect(packageReadme).not.toMatch(STABLE_RELEASE_CLAIM);
 });
 
 test('release boundaries do not add a changelog or provenance claim', async () => {
