@@ -1,6 +1,50 @@
 # PDF-Scrubber
 
+[![CI](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/ci.yml/badge.svg)](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Node.js](https://img.shields.io/badge/Node.js-24.18.0-339933.svg)](https://nodejs.org/)
+
 PDF-Scrubber edits supported machine-readable PDF text locally in the browser. It groups compatible left-to-right glyphs into editable fields and visual lines, preserves mixed style runs and recognised text decorations, and validates every candidate before enabling download. The first release replaces existing text only; it does not add text/images, edit scans, reflow paragraphs, or provide undo.
+
+## Requirements
+
+- System-managed Node.js 24.18.0
+- npm 11.16.0
+
+## Installation and run
+
+Run the published CLI without a permanent installation:
+
+```bash
+npx pdf-scrubber@latest
+```
+
+For an optional global installation:
+
+```bash
+npm install --global pdf-scrubber
+pdf-scrubber
+```
+
+The CLI uses loopback-only serving. It uses port 5173 by default, with a fallback port when that
+port is unavailable. Open the printed loopback URL in your browser. Press
+Ctrl-C to shut the server down.
+
+## Source development (authorised contributors)
+
+The GitHub source is private. Authorised contributors can work from a source checkout:
+
+```bash
+npm ci
+npm start
+```
+
+Open the printed loopback URL in your browser. Do not use the WSL network URL when Local Font
+Access is needed. PDF-Scrubber accepts supported PDFs up to 15 MiB (`15,728,640` bytes) and does
+not upload document bytes. Independent safeguards still limit PDFs to 2,000 indirect objects,
+nesting depth 12, 4 MiB decoded streams, 50,000 operations per stream, 12-megapixel page images,
+and 30-second operations; a file below 15 MiB can therefore still stop at a named processing
+limit.
 
 ## Supported editing
 
@@ -12,20 +56,6 @@ PDF-Scrubber edits supported machine-readable PDF text locally in the browser. I
 - Bidirectional, vertical-writing, clipping-mode, shared-resource, outlined, scanned, malformed, and otherwise unsafe text remains read-only with a reason. Line wrapping, paragraph reflow, and cross-line selection are outside this release.
 - Fit is measured from shaped glyphs before mutation. The allowed region may expand only up to the next protected glyph or page edge; overflow is rejected.
 - Candidate export requires independent source/candidate text, pixel, page-geometry, content-stream, controlled-redraw, and embedded-font validation.
-
-## Requirements
-
-- System-managed Node.js 24.18.0
-- npm 11.16.0
-
-## Run from WSL
-
-```bash
-npm ci
-npm start
-```
-
-Open the printed `http://localhost:5173/` URL in Windows. The server also prints the WSL network URL. PDF-Scrubber accepts supported PDFs up to 15 MiB (`15,728,640` bytes) and does not upload document bytes. Independent safeguards still limit PDFs to 2,000 indirect objects, nesting depth 12, 4 MiB decoded streams, 50,000 operations per stream, 12-megapixel page images, and 30-second operations; a file below 15 MiB can therefore still stop at a named processing limit.
 
 ## Checks
 
@@ -68,3 +98,10 @@ Edited PDFs produced before the rebrand remain readable. New controlled-redraw a
 - `fixtures/generated/` — committed synthetic PDFs used by unit and browser tests.
 - `tests/1`, `tests/2`, `tests/3` — committed multi-language PDF validation suites.
 - `tools/` — test runners, PDF inspection, fixture validation, and project policy checks.
+
+## Release workflow
+
+The publishable npm package is `apps/cli/`; the root workspace and internal packages remain
+private. Release checks build the browser assets, verify the package contents, and run the CLI
+smoke checks before a package is published. There is no changelog section because release
+metadata and documentation are updated together for each release.

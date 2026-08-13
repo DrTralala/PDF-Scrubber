@@ -165,7 +165,8 @@ test('explains insecure and unsupported Local Font Access environments', () => {
       provider={new BrowserLocalFontProvider({ isSecureContext: false })}
     />,
   );
-  expect(screen.getByText(/HTTPS or http:\/\/localhost:5173/)).toBeTruthy();
+  expect(screen.getByText(/HTTPS or a localhost URL/)).toBeTruthy();
+  expect(screen.queryByText(/localhost:5173/)).toBeNull();
   expect(screen.getByLabelText('Upload and apply font')).toBeTruthy();
   unmount();
 
