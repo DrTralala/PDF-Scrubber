@@ -8,6 +8,7 @@ import { expect, test } from 'vitest';
 const execFileAsync = promisify(execFile);
 const projectRoot = resolve(import.meta.dirname, '..');
 const STABLE_RELEASE_CLAIM = /(?:\bstable\s+(?:v?\d+\.\d+\.\d+|release|version)|\bv?1\.0\.0\s+(?:is\s+)?(?:available|published|released)|\b(?:available|published|released)\s+as\s+\bv?1\.0\.0|\b(?:current\s+)?version\s+(?:is\s+)?v?1\.0\.0|\[!\[(?:npm\s+)?version\])/i;
+const STABLE_PACKAGE_PUBLICATION_CLAIM = /(?:\b(?:pdf-scrubber@)?v?1\.0\.0\s+(?:is\s+)?(?:available|published|released)\b|\b(?:available|published|released)\s+as\s+[`'\"]?(?:pdf-scrubber@)?v?1\.0\.0\b)/i;
 
 function expectInOrder(content: string, fragments: readonly string[]): void {
   let offset = 0;
@@ -168,6 +169,7 @@ test('CLI README preserves runnable usage and avoids stale assembly wording', as
   expect(packageReadme).toMatch(/PDF and font processing remains local to the browser/);
   expect(packageReadme).not.toMatch(/being assembled incrementally|only package boundary and metadata/i);
   expect(packageReadme).not.toMatch(/version-specific release metadata is intentionally deferred/i);
+  expect(packageReadme).not.toMatch(STABLE_PACKAGE_PUBLICATION_CLAIM);
 });
 
 test('release boundaries do not add a changelog or provenance claim', async () => {
