@@ -16,6 +16,7 @@
     "build:cli": "npm run build --workspace @pdf-editor/web -- --outDir ../../apps/cli/dist --emptyOutDir",
     "pack:check": "tsx tools/check-cli-package.ts",
     "verify:package": "npm run build:cli && npm run pack:check",
+    "verify:release": "sh scripts/verify.sh",
     "test:cli": "vitest run --config apps/cli/vitest.config.ts",
     "test:cli:smoke": "tsx tools/run-cli-smoke.ts",
     "typecheck": "tsc -p tsconfig.base.json --noEmit",
