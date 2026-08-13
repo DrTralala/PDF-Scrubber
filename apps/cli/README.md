@@ -26,5 +26,6 @@ PDF and font processing remains local to the browser; document and font bytes
 are not uploaded to a server. The GitHub source is private; this package README
 documents the public npm interface only.
 
-The CLI runtime is being assembled incrementally; this package version
-establishes its public npm package boundary and metadata.
+This package is usable through the commands above. Version-specific release
+metadata is intentionally deferred. The browser editor performs PDF and font
+processing locally after the CLI starts the local server.
