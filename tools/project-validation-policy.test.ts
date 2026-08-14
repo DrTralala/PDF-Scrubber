@@ -169,7 +169,7 @@ test('release documentation requires full committed PDF suites', async () => {
     'These automated assertions remain authoritative when agent-browser cannot observe an internal invariant directly.',
   );
   expect(checks).toContain(
-    'After `test:web -- --full`, verify port 5173 is free before continuing. Repeat that check after `test:m0`.',
+    'Verify port 5173 is free before and after the Playwright gate, again immediately\nbefore M0, and after M0. Any listener on either address family blocks the next\nstrict-port-owned phase.',
   );
   expect(checks).toContain('Fresh `docs/research/m0-results.md` says `## Decision: GO`');
   expect(checks).toMatch(/^npm run test:web -- --full$/m);
@@ -187,4 +187,35 @@ test('release documentation requires full committed PDF suites', async () => {
   expect(readme).toContain('manifest/hash verified');
   expect(readme).toContain('not regenerated during tests');
   expect(readme).toContain('removes the downloads afterwards');
+});
+
+test('release validation reference mirrors the canonical verifier and package gates', async () => {
+  const [checks, verifier] = await Promise.all([
+    readFile(resolve(
+      projectRoot,
+      '.opencode/skills/pdf-scrubber-run-validate/references/automated-checks.md',
+    ), 'utf8'),
+    readFile(resolve(projectRoot, 'scripts/verify.sh'), 'utf8'),
+  ]);
+
+  const canonicalSequence = verifier
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith('npm run ')
+      || line === 'assert_port_5173_free'
+      || line === 'require_m0_go');
+  const documentedBlock = checks.match(
+    /## Complete automated release gate order[\s\S]*?```bash\n([\s\S]*?)\n```/,
+  );
+
+  expect(documentedBlock).not.toBeNull();
+  const documentedSequence = documentedBlock?.[1]
+    ?.split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  expect(documentedSequence).toEqual(canonicalSequence);
+  expect(checks).toContain('build:cli');
+  expect(checks).toContain('pack:check');
+  expect(checks).toContain('installed CLI');
+  expect(checks).not.toContain('| `build:web` |');
 });
