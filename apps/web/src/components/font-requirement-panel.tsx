@@ -2,6 +2,10 @@ import type { JSX } from 'react';
 
 import type { EditorRichFontStatus } from '../model/editor-state';
 
+function requestedFontName(value: string | null): string {
+  return value?.replace(/^[A-Z]{6}\+/, '') ?? 'Unidentified font';
+}
+
 export function FontRequirementPanel({
   statuses,
   consents,
@@ -16,10 +20,11 @@ export function FontRequirementPanel({
   return (
     <section className="font-requirements" aria-labelledby="font-requirements-title">
       <h3 id="font-requirements-title">Font substitution required</h3>
-      {relevant.map((status) => (
-        <div className="font-requirement" key={status.key}>
+      {relevant.map((status) => {
+        const requestedName = requestedFontName(status.requestedName);
+        return <div className="font-requirement" key={status.key}>
           <p>
-            Requested: <strong>{status.requestedName ?? 'Unidentified font'}</strong><br />
+            Requested: <strong>{requestedName}</strong><br />
             {status.matchKind === 'unavailable'
               ? 'No registered font covers this text. Upload a suitable font.'
               : <>Using: <strong>{status.actualName ?? 'Unnamed font'}</strong> ({status.source})</>}
@@ -31,11 +36,11 @@ export function FontRequirementPanel({
                 checked={consents.includes(status.fontId)}
                 onChange={(event) => onConsent(status.fontId!, event.currentTarget.checked)}
               />
-              Allow {status.actualName ?? 'selected font'} for {status.requestedName ?? 'unidentified font'}
+              Allow {status.actualName ?? 'selected font'} for {requestedName}
             </label>
           )}
-        </div>
-      ))}
+        </div>;
+      })}
     </section>
   );
 }
