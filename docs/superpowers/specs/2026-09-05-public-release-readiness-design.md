@@ -39,13 +39,13 @@ Verify that the existing release URL works and that npm still reports `pdf-scrub
 
 Remove the complete root `README.md` section beginning with `## Supported editing` and ending immediately before `## Checks`. Do not restructure unrelated README content.
 
-Because the final repository will be public, replace the statements that GitHub source is private in both `README.md` and `apps/cli/README.md` with accurate public-source wording. Version-bearing badges and pinned commands are updated as part of 1.1.0 preparation without claiming that 1.1.0 has been published.
+Because the final repository will be public, replace the statements that GitHub source is private in both `README.md` and `apps/cli/README.md` with accurate public-source wording. Keep version-bearing badges and runnable pinned commands at the published stable version `1.0.0`; pointing public documentation at absent v1.1.0 Git and npm artefacts would be inaccurate.
 
 ## Version 1.1.0 preparation
 
 Begin only after the rewritten `main` is clean, private, and synchronised with upstream. Prove that neither `v1.1.0` nor `pdf-scrubber@1.1.0` exists; lookup or authentication errors are blockers.
 
-Update `apps/cli/package.json`, the root `package-lock.json`, and version-bearing references in `README.md` and `apps/cli/README.md` to exactly `1.1.0`. Run focused release-contract tests, package checks, and `npm run verify:release`. Stop on any failure.
+Update `apps/cli/package.json` and the root `package-lock.json` to exactly `1.1.0`. Update package-identity checks to the prepared version while retaining README badge, link, command, and stable-publication guard expectations at published version `1.0.0`. Run focused release-contract tests, package checks, and `npm run verify:release`. Stop on any failure.
 
 Commit and push the intended documentation and release metadata normally. Require the repository tree and release SHA to remain unchanged and require a successful GitHub `Verify` workflow for that exact SHA. Draft complete Swoof-style 1.1.0 release notes for review, but do not create a tag or GitHub Release and do not publish npm.
 
