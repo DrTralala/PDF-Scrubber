@@ -116,17 +116,21 @@ export async function decodeStreamBytes(
   if (filter === undefined) {
     return copyWithinLimit(stream.contents, maxDecodedStreamBytes);
   }
+  let singleFilter: unknown = filter;
   if (filter instanceof PDFArray) {
-    throw new PdfEngineError(
-      'UNSUPPORTED_DOCUMENT',
-      'PDF stream filter chains are not supported in M0',
-    );
+    if (filter.size() !== 1) {
+      throw new PdfEngineError(
+        'UNSUPPORTED_DOCUMENT',
+        'PDF stream filter chains are not supported in M0',
+      );
+    }
+    singleFilter = filter.get(0);
   }
-  if (!(filter instanceof PDFName) || filter.asString() !== '/FlateDecode') {
+  if (!(singleFilter instanceof PDFName) || singleFilter.asString() !== '/FlateDecode') {
     throw new PdfEngineError(
       'UNSUPPORTED_DOCUMENT',
       'PDF stream filter is not supported in M0',
-      { filter: filter.toString() },
+      { filter: String(singleFilter) },
     );
   }
 
