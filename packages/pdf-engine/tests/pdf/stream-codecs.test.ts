@@ -1,4 +1,4 @@
-import { PDFContext } from 'pdf-lib';
+import { PDFContext, PDFName } from 'pdf-lib';
 import { describe, expect, it } from 'vitest';
 
 import { decodeStreamBytes } from '../../src/pdf/stream-codecs';
@@ -14,6 +14,19 @@ describe('decodeStreamBytes', () => {
 
   it('decodes the single FlateDecode form emitted by the corpus builder', async () => {
     const stream = PDFContext.create().flateStream('compressed content');
+
+    expect(new TextDecoder().decode(await decodeStreamBytes(stream, 1024))).toBe(
+      'compressed content',
+    );
+  });
+
+  it('decodes a singleton FlateDecode filter array', async () => {
+    const context = PDFContext.create();
+    const stream = context.flateStream('compressed content');
+    stream.dict.set(
+      PDFName.of('Filter'),
+      context.obj([PDFName.of('FlateDecode')]),
+    );
 
     expect(new TextDecoder().decode(await decodeStreamBytes(stream, 1024))).toBe(
       'compressed content',
