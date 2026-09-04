@@ -16,11 +16,11 @@ Remove `.opencode` from the repository's reachable Git history, modernise the ex
 
 ## History cleanup
 
-Capture the original `main` and `v1.0.0` SHAs and the current v1.0.0 release metadata. Create an OpenCode-owned temporary recovery bundle outside the checkout before rewriting. Preserve the local `.opencode/` directory outside the rewrite and restore it only as ignored, untracked tooling.
+Capture the original `main` and `v1.0.0` SHAs, the current v1.0.0 release metadata, and the IDs of all existing GitHub Actions runs. Create an OpenCode-owned temporary recovery bundle outside the checkout before rewriting. Preserve the local `.opencode/` directory outside the rewrite and restore it only as ignored, untracked tooling.
 
 Replace the current `.opencode` exception rules in `.gitignore` with one `.opencode/` rule. Retain `docs/` in `.gitignore`. Apply a path-targeted history rewrite that removes `.opencode/**` from every commit while preserving every unrelated path and commit. Verify the path is absent from all rewritten trees and reachable refs before updating GitHub.
 
-Force-update only `main` and `v1.0.0`. Confirm both remote refs resolve to the expected rewritten SHAs. If either update fails or only one ref changes, keep the repository private and repair the ref state before proceeding. Remove the temporary recovery bundle only after remote verification and when rollback evidence is no longer required.
+Force-update only `main` and `v1.0.0`. Confirm both remote refs resolve to the expected rewritten SHAs. If either update fails or only one ref changes, keep the repository private and repair the ref state before proceeding. Delete every GitHub Actions run captured before the rewrite so its old commit reference, logs, and artefacts cannot become public; retain only runs created against cleaned history. Remove the temporary recovery bundle only after remote verification and when rollback evidence is no longer required.
 
 ## Existing v1.0.0 release
 
@@ -67,7 +67,7 @@ Secret values must never be printed in the report. Scanner errors, incomplete hi
 
 Change GitHub visibility only when all of these conditions hold:
 
-1. `.opencode` is absent from all reachable remote history and tags.
+1. `.opencode` is absent from all reachable remote history and tags, and all pre-rewrite GitHub Actions runs have been deleted.
 2. The rewritten `main` and `v1.0.0` refs match the locally verified refs.
 3. The v1.0.0 release is accurate and npm 1.0.0 remains available.
 4. The 1.1.0 preparation commit passed local release gates and exact-SHA GitHub verification.
