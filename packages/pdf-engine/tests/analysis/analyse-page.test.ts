@@ -19,6 +19,11 @@ async function analyseFixture(id: string, pageIndex = 0) {
   return analysePage(store, pageIndex);
 }
 
+async function analysePdf(path: string) {
+  const store = await ObjectStore.open(await readFile(path), PROVISIONAL_LIMITS);
+  return analysePage(store, 0);
+}
+
 async function positionedDocument(x: number, y: number): Promise<Uint8Array> {
   const document = await PDFDocument.create();
   const page = document.addPage([300, 300]);
@@ -150,6 +155,24 @@ describe('analysePage', () => {
 
     expect(spanAddressKey(first.address)).toBe(spanAddressKey(second.address));
     expect(first.bounds).not.toEqual(second.bounds);
+  });
+
+  test('retains the ONLYOFFICE TJ forward gap on the following glyph', async () => {
+    const page = await analysePdf('ONLYOFFICE.pdf');
+    const alpha = page.spans.find(({ unicode }) => unicode === 'AlphaBeta')!;
+    const beta = alpha.glyphs.find(({ unicode }) => unicode === 'B')!;
+
+    expect(beta.sourceTextGapBefore).toBeCloseTo(2.7797543, 6);
+    expect(alpha.glyphs.filter(({ sourceTextGapBefore }) => sourceTextGapBefore !== null))
+      .toHaveLength(1);
+  });
+
+  test('retains a backward TJ kerning adjustment without treating it as a forward gap', async () => {
+    const page = await analyseFixture('02-kerned-tj-array');
+    const span = page.spans.find(({ unicode }) => unicode === 'Target 02')!;
+    const kerned = span.glyphs.find(({ unicode }) => unicode === 'g')!;
+
+    expect(kerned.sourceTextGapBefore).toBeCloseTo(-0.96, 6);
   });
 
   test('carries graphics state across ordered page content streams', async () => {

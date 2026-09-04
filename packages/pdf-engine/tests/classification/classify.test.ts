@@ -81,6 +81,7 @@ function span(overrides: Partial<AnalysedSpan> = {}): AnalysedSpan {
         glyphId: 65,
         unicode: 'A',
         advance: 10,
+        sourceTextGapBefore: null,
         source: Object.freeze({
           pageRef: Object.freeze({ objectNumber: 1, generationNumber: 0 }),
           streamPath: Object.freeze([
@@ -127,6 +128,7 @@ function span(overrides: Partial<AnalysedSpan> = {}): AnalysedSpan {
         glyphId: 66,
         unicode: 'B',
         advance: 10,
+        sourceTextGapBefore: null,
         source: Object.freeze({
           pageRef: Object.freeze({ objectNumber: 1, generationNumber: 0 }),
           streamPath: Object.freeze([

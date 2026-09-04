@@ -228,6 +228,7 @@ type GlyphPlacement = Readonly<{
   glyph: DecodedGlyph;
   advance: number;
   offset: number;
+  sourceTextGapBefore: number | null;
 }>;
 
 function glyphPlacements(
@@ -241,8 +242,10 @@ function glyphPlacements(
   let glyphIndex = 0;
   let cursor = 0;
   let codeOffset = 0;
+  let pendingSourceTextGap: number | null = null;
   const appendString = (length: number): void => {
     const itemEnd = codeOffset + length;
+    let firstGlyphInString = true;
     while (glyphIndex < decoded.length) {
       const glyph = decoded[glyphIndex]!;
       if (glyph.sourceCodeStart >= itemEnd) break;
@@ -253,7 +256,16 @@ function glyphPlacements(
         );
       }
       const advance = advances[glyphIndex]!;
-      placements.push(Object.freeze({ glyph, advance, offset: cursor }));
+      placements.push(Object.freeze({
+        glyph,
+        advance,
+        offset: cursor,
+        sourceTextGapBefore: firstGlyphInString ? pendingSourceTextGap : null,
+      }));
+      if (firstGlyphInString) {
+        pendingSourceTextGap = null;
+        firstGlyphInString = false;
+      }
       cursor += advance;
       glyphIndex += 1;
     }
@@ -265,7 +277,9 @@ function glyphPlacements(
   } else if (operand.kind === 'array') {
     for (const item of operand.items) {
       if (item.kind === 'number') {
-        cursor -= item.value / 1000 * fontSize * horizontalScaling;
+        const displacement = -item.value / 1000 * fontSize * horizontalScaling;
+        cursor += displacement;
+        pendingSourceTextGap = (pendingSourceTextGap ?? 0) + displacement;
       } else if (item.kind === 'literalString' || item.kind === 'hexString') {
         appendString(item.value.length);
       }
@@ -307,7 +321,10 @@ function analysedGlyphs(
   style: EffectiveTextStyle,
 ): readonly AnalysedGlyph[] {
   const streamPath = Object.freeze([...path]);
-  return Object.freeze(placements.map(({ glyph, advance, offset }, glyphIndex) => {
+  return Object.freeze(placements.map((
+    { glyph, advance, offset, sourceTextGapBefore },
+    glyphIndex,
+  ) => {
     const corners = [
       transformPoint(renderMatrix, offset, bottom),
       transformPoint(renderMatrix, offset + advance, bottom),
@@ -322,6 +339,7 @@ function analysedGlyphs(
       glyphId: glyph.glyphId,
       unicode: glyph.unicode,
       advance,
+      sourceTextGapBefore,
       source: Object.freeze({
         pageRef,
         streamPath,

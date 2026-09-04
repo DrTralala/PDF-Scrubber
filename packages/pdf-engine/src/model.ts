@@ -159,6 +159,7 @@ export type AnalysedGlyph = Readonly<{
   glyphId: number | null;
   unicode: string | null;
   advance: number;
+  sourceTextGapBefore: number | null;
   source: GlyphSourceAddress;
   mutationAddress: SpanAddress;
   bounds: CanonicalBounds;
