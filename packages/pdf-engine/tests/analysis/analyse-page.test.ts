@@ -36,6 +36,23 @@ async function positionedDocument(x: number, y: number): Promise<Uint8Array> {
   return document.save({ useObjectStreams: false });
 }
 
+async function scaledTjDocument(horizontalScaling: number): Promise<Uint8Array> {
+  const document = await PDFDocument.create();
+  const page = document.addPage([300, 300]);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  const fontName = page.node.newFontDictionary('Scaled', font.ref).toString();
+  const stream = document.context.register(document.context.stream([
+    'BT',
+    `${fontName} 12 Tf`,
+    `${horizontalScaling} Tz`,
+    '40 100 Td',
+    '[(A) 200 (B)] TJ',
+    'ET',
+  ].join('\n')));
+  page.node.set(PDFName.of('Contents'), stream);
+  return document.save({ useObjectStreams: false });
+}
+
 async function styledDocument(): Promise<Uint8Array> {
   const document = await PDFDocument.create();
   const page = document.addPage([300, 300]);
@@ -173,6 +190,28 @@ describe('analysePage', () => {
     const kerned = span.glyphs.find(({ unicode }) => unicode === 'g')!;
 
     expect(kerned.sourceTextGapBefore).toBeCloseTo(-0.96, 6);
+  });
+
+  test('keeps TJ direction authoritative when horizontal scaling is negative', async () => {
+    const [normalStore, mirroredStore] = await Promise.all([
+      ObjectStore.open(await scaledTjDocument(100), PROVISIONAL_LIMITS),
+      ObjectStore.open(await scaledTjDocument(-100), PROVISIONAL_LIMITS),
+    ]);
+    const normal = (await analysePage(normalStore, 0)).spans[0]!;
+    const mirrored = (await analysePage(mirroredStore, 0)).spans[0]!;
+    const normalA = normal.glyphs[0]!;
+    const normalB = normal.glyphs[1]!;
+    const mirroredA = mirrored.glyphs[0]!;
+    const mirroredB = mirrored.glyphs[1]!;
+
+    expect(normalB.sourceTextGapBefore).toBeCloseTo(-2.4, 7);
+    expect(mirroredB.sourceTextGapBefore).toBeCloseTo(-2.4, 7);
+    expect(mirroredA.bounds.width).toBeCloseTo(normalA.bounds.width, 7);
+    expect(mirroredB.bounds.width).toBeCloseTo(normalB.bounds.width, 7);
+    expect(mirroredB.baseline[0]).toBeCloseTo(
+      2 * normalA.baseline[0] - normalB.baseline[0],
+      7,
+    );
   });
 
   test('carries graphics state across ordered page content streams', async () => {
