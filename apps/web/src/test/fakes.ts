@@ -125,6 +125,7 @@ export function analysisFixture(
       glyphId: index + 1,
       unicode,
       advance: span.bounds.width,
+      sourceTextGapBefore: null,
       source: Object.freeze({
         pageRef: span.address.pageRef,
         streamPath: span.address.streamPath,
@@ -210,6 +211,7 @@ export function textLineAnalysisFixture(
       glyphId: index + 1,
       unicode,
       advance: 12,
+      sourceTextGapBefore: null,
       source: Object.freeze({
         pageRef: address.pageRef,
         streamPath: address.streamPath,
