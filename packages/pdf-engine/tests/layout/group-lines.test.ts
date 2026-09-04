@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
+import { PDFDocument, PDFName, StandardFonts } from 'pdf-lib';
 import { describe, expect, test } from 'vitest';
 
 import { analysePage } from '../../src/analysis/analyse-page';
@@ -21,6 +22,23 @@ async function layoutPdf(path: string) {
   return groupPageText(await analysePage(store, 0));
 }
 
+async function negativeScalePositiveTjDocument(): Promise<Uint8Array> {
+  const document = await PDFDocument.create();
+  const page = document.addPage([300, 300]);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  const fontName = page.node.newFontDictionary('Scaled', font.ref).toString();
+  const stream = document.context.register(document.context.stream([
+    'BT',
+    `${fontName} 12 Tf`,
+    '-100 Tz',
+    '40 100 Td',
+    '[(A) 1000 (B)] TJ',
+    'ET',
+  ].join('\n')));
+  page.node.set(PDFName.of('Contents'), stream);
+  return document.save({ useObjectStreams: false });
+}
+
 function sourceKey(source: {
   streamPath: readonly { ref: { objectNumber: number; generationNumber: number } }[];
   operatorIndex: number;
@@ -39,6 +57,17 @@ describe('groupPageText', () => {
       .toEqual(['Alpha Beta', 'Gamma Delta']);
     expect(kerned.lines.flatMap(({ groups }) => groups.map(({ text }) => text)))
       .toContain('Target 02');
+  });
+
+  test('does not infer a space from a positive TJ value under negative scaling', async () => {
+    const store = await ObjectStore.open(
+      await negativeScalePositiveTjDocument(),
+      PROVISIONAL_LIMITS,
+    );
+    const layout = groupPageText(await analysePage(store, 0));
+
+    expect(layout.lines.map(({ groups }) => groups.map(({ text }) => text).join('')))
+      .toEqual(['AB']);
   });
 
   test('groups every eligible wkhtmltopdf glyph into the intended fields and sentence', async () => {

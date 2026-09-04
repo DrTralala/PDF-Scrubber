@@ -277,9 +277,12 @@ function glyphPlacements(
   } else if (operand.kind === 'array') {
     for (const item of operand.items) {
       if (item.kind === 'number') {
+        // Cursor geometry follows signed horizontal scaling, but TJ direction
+        // remains authoritative for source-gap evidence.
         const displacement = -item.value / 1000 * fontSize * horizontalScaling;
+        const sourceGap = -item.value / 1000 * fontSize * Math.abs(horizontalScaling);
         cursor += displacement;
-        pendingSourceTextGap = (pendingSourceTextGap ?? 0) + displacement;
+        pendingSourceTextGap = (pendingSourceTextGap ?? 0) + sourceGap;
       } else if (item.kind === 'literalString' || item.kind === 'hexString') {
         appendString(item.value.length);
       }
