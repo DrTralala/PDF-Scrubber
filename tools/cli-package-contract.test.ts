@@ -11,7 +11,7 @@ test('CLI workspace is the only publishable PDF-Scrubber package', async () => {
   expect(rootPackage.private).toBe(true);
   expect(cliPackage).toMatchObject({
     name: 'pdf-scrubber',
-    version: '1.0.0',
+    version: '1.1.0',
     license: 'MIT',
     type: 'module',
     bin: { 'pdf-scrubber': 'bin/pdf-scrubber.js' },
@@ -22,6 +22,6 @@ test('CLI workspace is the only publishable PDF-Scrubber package', async () => {
   expect(cliPackage.files).toEqual(['bin/', 'lib/', 'dist/', 'README.md', 'LICENSE']);
   expect(lockfile.packages['apps/cli']).toMatchObject({
     name: 'pdf-scrubber',
-    version: '1.0.0',
+    version: '1.1.0',
   });
 });

@@ -60,8 +60,10 @@ test('root README exposes stable release badges and npm usage guidance', async (
   expect(readme).toContain('pdf-scrubber@1.0.0');
   expect(readme).toContain('https://github.com/DrTralala/PDF-Scrubber/tree/v1.0.0');
   expect(readme).toContain('img.shields.io/badge/version-v1.0.0-blue.svg?style=flat-square');
-  expect(readme).toMatch(/^## Source development \(authorised contributors\)$/m);
-  expect(readme).toMatch(/## Source development \(authorised contributors\)[\s\S]*npm ci[\s\S]*npm start/);
+  expect(readme).toMatch(/^## Source development$/m);
+  expect(readme).toMatch(/## Source development[\s\S]*Build and run PDF-Scrubber from a source checkout:[\s\S]*npm ci[\s\S]*npm start/);
+  expect(readme).not.toMatch(/^## Supported editing$/m);
+  expect(readme).not.toMatch(/GitHub source is private|authorised contributors/i);
   expect(readme).toMatch(/loopback-only serving/i);
   expect(readme).toMatch(/port 5173.*fallback/i);
 });
@@ -99,6 +101,8 @@ test('CLI README preserves runnable usage and avoids stale assembly wording', as
   expect(packageReadme).toContain('pdf-scrubber@1.0.0');
   expect(packageReadme).toMatch(/loopback[\s\S]*port 5173[\s\S]*fallback[\s\S]*Ctrl-C/);
   expect(packageReadme).toMatch(/PDF and font processing remains local to the browser/);
+  expect(packageReadme).toMatch(/GitHub source is public/);
+  expect(packageReadme).not.toMatch(/GitHub source is private/);
   expect(packageReadme).not.toMatch(/being assembled incrementally|only package boundary and metadata/i);
   expect(packageReadme).not.toMatch(/version-specific release metadata is intentionally deferred/i);
   expect(packageReadme).not.toMatch(STABLE_PACKAGE_PUBLICATION_CLAIM);

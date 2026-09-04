@@ -37,9 +37,9 @@ The CLI uses loopback-only serving. It uses port 5173 by default, with a fallbac
 port is unavailable. Open the printed loopback URL in your browser. Press
 Ctrl-C to shut the server down.
 
-## Source development (authorised contributors)
+## Source development
 
-The GitHub source is private. Authorised contributors can work from a source checkout:
+Build and run PDF-Scrubber from a source checkout:
 
 ```bash
 npm ci
@@ -52,17 +52,6 @@ not upload document bytes. Independent safeguards still limit PDFs to 2,000 indi
 nesting depth 12, 4 MiB decoded streams, 50,000 operations per stream, 12-megapixel page images,
 and 30-second operations; a file below 15 MiB can therefore still stop at a named processing
 limit.
-
-## Supported editing
-
-- Machine-readable left-to-right text with resolvable source glyphs can be selected as an inferred field, a visual line, or a source-backed range within one line. Finite rotated and sheared text is supported; vertical writing remains read-only.
-- Unchanged text retains its analysed font size, weight, italic angle, colour, spacing, scaling, rise, rendering mode, and high-confidence underline/strikethrough state. Replacement text inherits the style at the replaced range; the inspector can override font, size, bold, italic, underline, strikethrough, colour, spacing, and horizontal scale.
-- PDF-Scrubber uses bundled regular and bold Noto Sans fallbacks. Uploading a supported font registers and applies it to the captured text range. Where the browser exposes Local Font Access, `Enable local fonts` explicitly requests permission and caches authorised metadata for the tab; font bytes remain in memory and are embedded into the edited PDF.
-- Edited-document embedding rights are enforced. Single-face static TTF, static CFF/OTF, and WOFF1 inputs are supported; WOFF2, font collections, variable fonts, colour fonts, and fonts that prohibit edited-document embedding are rejected.
-- Simple solid source underlines and strikethroughs are recognised only when geometry, colour, thickness, ownership, and source addresses are unambiguous. Tables, separators, shared graphics, and custom/double/dashed/wavy lines are preserved with a warning rather than removed.
-- Bidirectional, vertical-writing, clipping-mode, shared-resource, outlined, scanned, malformed, and otherwise unsafe text remains read-only with a reason. Line wrapping, paragraph reflow, and cross-line selection are outside this release.
-- Fit is measured from shaped glyphs before mutation. The allowed region may expand only up to the next protected glyph or page edge; overflow is rejected.
-- Candidate export requires independent source/candidate text, pixel, page-geometry, content-stream, controlled-redraw, and embedded-font validation.
 
 ## Checks
 
