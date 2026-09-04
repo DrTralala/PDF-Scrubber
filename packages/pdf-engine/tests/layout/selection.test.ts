@@ -16,7 +16,23 @@ async function layoutFixture(id: string) {
   return groupPageText(await analysePage(store, 0));
 }
 
+async function layoutPdf(path: string) {
+  const bytes = await readFile(path);
+  const store = await ObjectStore.open(bytes, PROVISIONAL_LIMITS);
+  return groupPageText(await analysePage(store, 0));
+}
+
 describe('buildTextSelection', () => {
+  test('includes an inferred ONLYOFFICE space in editable selection text', async () => {
+    const layout = await layoutPdf('ONLYOFFICE.pdf');
+    const line = layout.lines.find(({ glyphs }) =>
+      glyphs.map(({ unicode }) => unicode).join('') === 'AlphaBeta')!;
+
+    const selection = buildTextSelection(line, 0, line.glyphs.length - 1);
+
+    expect(selection.text).toBe('Alpha Beta');
+  });
+
   test('builds the same contiguous source-backed selection in either drag direction', async () => {
     const layout = await layoutFixture('30-wkhtmltopdf-rich-line');
     const line = layout.lines.find((candidate) =>

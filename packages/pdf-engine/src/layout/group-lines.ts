@@ -133,6 +133,14 @@ function hasExplicitSpace(left: AnalysedGlyph, right: AnalysedGlyph): boolean {
   return /\s$/u.test(glyphText(left)) || /^\s/u.test(glyphText(right));
 }
 
+const SOURCE_WORD_GAP_EM = 0.2;
+
+function sourceGapIndicatesSpace(glyph: AnalysedGlyph): boolean | null {
+  if (glyph.sourceTextGapBefore === null) return null;
+  const scaledEm = glyph.style.fontSize * Math.abs(glyph.style.horizontalScaling);
+  return scaledEm > 0 && glyph.sourceTextGapBefore >= scaledEm * SOURCE_WORD_GAP_EM;
+}
+
 function needsSyntheticSpace(
   glyphs: readonly AnalysedGlyph[],
   index: number,
@@ -141,6 +149,8 @@ function needsSyntheticSpace(
   const left = glyphs[index - 1]!;
   const right = glyphs[index]!;
   if (hasExplicitSpace(left, right)) return false;
+  const sourceDecision = sourceGapIndicatesSpace(right);
+  if (sourceDecision !== null) return sourceDecision;
   const height = median(glyphs.map(({ bounds }) => bounds.height));
   const gap = gapBetween(left, right);
   return gap > height * 0.15 && gap <= height * 0.75;

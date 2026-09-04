@@ -15,6 +15,12 @@ async function layoutFixture(id: string) {
   return groupPageText(await analysePage(store, 0));
 }
 
+async function layoutPdf(path: string) {
+  const bytes = await readFile(path);
+  const store = await ObjectStore.open(bytes, PROVISIONAL_LIMITS);
+  return groupPageText(await analysePage(store, 0));
+}
+
 function sourceKey(source: {
   streamPath: readonly { ref: { objectNumber: number; generationNumber: number } }[];
   operatorIndex: number;
@@ -25,6 +31,16 @@ function sourceKey(source: {
 }
 
 describe('groupPageText', () => {
+  test('reconstructs ONLYOFFICE word gaps without turning TJ kerning into spaces', async () => {
+    const onlyOffice = await layoutPdf('ONLYOFFICE.pdf');
+    const kerned = await layoutFixture('02-kerned-tj-array');
+
+    expect(onlyOffice.lines.map(({ groups }) => groups.map(({ text }) => text).join('')))
+      .toEqual(['Alpha Beta', 'Gamma Delta']);
+    expect(kerned.lines.flatMap(({ groups }) => groups.map(({ text }) => text)))
+      .toContain('Target 02');
+  });
+
   test('groups every eligible wkhtmltopdf glyph into the intended fields and sentence', async () => {
     const layout = await layoutFixture('30-wkhtmltopdf-rich-line');
 
