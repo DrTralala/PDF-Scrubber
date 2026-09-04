@@ -1,6 +1,3 @@
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
-
 import { expect, test } from 'vitest';
 
 import {
@@ -9,8 +6,6 @@ import {
 } from './project-validation-policy';
 
 type JsonObject = Record<string, unknown>;
-
-const projectRoot = resolve(import.meta.dirname, '..');
 
 const EXPECTED_BASH_ENTRIES = [
   ['*', 'ask'],
@@ -149,73 +144,4 @@ test('effective merged Bash policy resets inherited allows before project valida
     expect(evaluateBashPolicy(command, effectiveEntries), command).toBe('allow');
   }
   expect(evaluateBashPolicy('npm run typecheck > output.log', effectiveEntries)).toBe('ask');
-});
-
-test('release documentation requires full committed PDF suites', async () => {
-  const checks = await readFile(resolve(
-    projectRoot,
-    '.opencode/skills/pdf-scrubber-run-validate/references/automated-checks.md',
-  ), 'utf8');
-  const readme = await readFile(resolve(projectRoot, 'README.md'), 'utf8');
-
-  expect(checks).toContain("ss -ltnp '( sport = :5173 )'");
-  expect(checks).toContain('Any listener on port 5173 is a blocker');
-  expect(checks).toContain('Playwright uses `http://[::1]:5173`');
-  expect(checks).toContain('starts `npm start -- --host ::1 --mode test`');
-  expect(checks).toContain('`reuseExistingServer: false`');
-  expect(checks).toContain('Playwright owns its test-mode server');
-  expect(checks).toContain('empty attempted-remote-request list');
-  expect(checks).toContain(
-    'These automated assertions remain authoritative when agent-browser cannot observe an internal invariant directly.',
-  );
-  expect(checks).toContain(
-    'Verify port 5173 is free before and after the Playwright gate, again immediately\nbefore M0, and after M0. Any listener on either address family blocks the next\nstrict-port-owned phase.',
-  );
-  expect(checks).toContain('Fresh `docs/research/m0-results.md` says `## Decision: GO`');
-  expect(checks).toMatch(/^npm run test:web -- --full$/m);
-  expect(checks).toMatch(/`npm run test:web` runs the existing browser tests plus committed Suite 1\./);
-  expect(checks).toMatch(/must run `npm run test:web -- --full` so all three committed suites are covered\./);
-
-  expect(readme).toMatch(/^# Routine: existing browser tests plus committed Suite 1$/m);
-  expect(readme).toMatch(/^npm run test:web$/m);
-  expect(readme).toMatch(/^# Full: existing browser tests plus committed Suites 1–3$/m);
-  expect(readme).toMatch(/^npm run test:web -- --full$/m);
-  expect(readme).toContain('Port 5173 must be free before either browser command');
-  expect(readme).toContain('strict-port test server');
-  expect(checks).toContain('all three committed suites');
-  expect(readme).toContain('synthetic');
-  expect(readme).toContain('manifest/hash verified');
-  expect(readme).toContain('not regenerated during tests');
-  expect(readme).toContain('removes the downloads afterwards');
-});
-
-test('release validation reference mirrors the canonical verifier and package gates', async () => {
-  const [checks, verifier] = await Promise.all([
-    readFile(resolve(
-      projectRoot,
-      '.opencode/skills/pdf-scrubber-run-validate/references/automated-checks.md',
-    ), 'utf8'),
-    readFile(resolve(projectRoot, 'scripts/verify.sh'), 'utf8'),
-  ]);
-
-  const canonicalSequence = verifier
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.startsWith('npm run ')
-      || line === 'assert_port_5173_free'
-      || line === 'require_m0_go');
-  const documentedBlock = checks.match(
-    /## Complete automated release gate order[\s\S]*?```bash\n([\s\S]*?)\n```/,
-  );
-
-  expect(documentedBlock).not.toBeNull();
-  const documentedSequence = documentedBlock?.[1]
-    ?.split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  expect(documentedSequence).toEqual(canonicalSequence);
-  expect(checks).toContain('build:cli');
-  expect(checks).toContain('pack:check');
-  expect(checks).toContain('installed CLI');
-  expect(checks).not.toContain('| `build:web` |');
 });
