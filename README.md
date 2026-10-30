@@ -73,6 +73,8 @@ npm run test:m0
 
 Port 5173 must be free before either browser command because the Playwright suite starts its own strict-port test server. The committed PDFs are synthetic, manifest/hash verified, checked for PDF readability and metadata, and not regenerated during tests.
 
+M0 reports and runtime evidence are written under ignored `artifacts/m0/`.
+
 Large public-PDF validation is opt-in because it downloads roughly 25 MiB into temporary storage:
 
 ```bash
@@ -80,6 +82,14 @@ npm run validate:large-pdfs
 ```
 
 The command verifies exact sizes, SHA-256 hashes, and PDF signatures for the pinned public PDFs, runs their dedicated browser checks, and removes the downloads afterwards.
+
+## Windows portable app
+
+Stable, non-prerelease releases build and test a Windows x64 portable executable, then attach it with a SHA-256 checksum and source provenance to the same GitHub release. When a release has these desktop assets, download `PDF-Scrubber-<version>-win-x64-portable.exe` from its Assets list; the accompanying `provenance.json` identifies the editor tag/revision and packaging revision.
+
+The executable is unsigned, so Windows may show a security warning. It does not require a separately installed Node.js runtime or an installer. Portable does not mean no-trace or USB-only: Electron may store ordinary per-user application and cache data on the computer.
+
+To build a version manually without publishing or modifying a release, open **Actions → Windows portable → Run workflow**, enter an editor tag such as `v1.0.0`, and download the completed workflow artifact. The editor is built from that tag using its lockfile; the desktop wrapper and packaging configuration come from the selected workflow revision. Manual builds do not attach files to a release. This also allows a historical editor tag to be packaged with the current wrapper without changing that tag.
 
 ## PDF limits and compatibility
 
@@ -100,6 +110,7 @@ A file below 15 MiB can still exceed one of the other limits. Edited PDFs produc
 ## Project structure
 
 - `apps/web/` — React/Vite editor application and browser tests.
+- `apps/desktop/` — secure Electron wrapper and Windows portable packaging configuration.
 - `packages/pdf-engine/` — PDF analysis, mutation, shaping, validation, and export engine.
 - `packages/worker-protocol/` — worker message types and transfer helpers.
 - `packages/test-support/` — fixture, rendering, diff, and validation helpers.

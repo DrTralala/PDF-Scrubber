@@ -1,0 +1,13 @@
+{
+  "name": "@pdf-editor/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:portable": "electron-builder --config electron-builder.config.cjs --win portable --x64"
+  },
+  "devDependencies": {
+    "electron": "45.1.0",
+    "electron-builder": "26.18.0"
+  }
+}

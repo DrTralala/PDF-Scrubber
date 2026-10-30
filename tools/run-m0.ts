@@ -49,8 +49,8 @@ import {
 } from '@pdf-editor/test-support';
 
 const execFileAsync = promisify(execFile);
-const REPORT_JSON = resolve('docs/research/m0-results.json');
-const REPORT_MARKDOWN = resolve('docs/research/m0-results.md');
+const REPORT_JSON = resolve('artifacts/m0/m0-results.json');
+const REPORT_MARKDOWN = resolve('artifacts/m0/m0-results.md');
 const RUNTIME_ARTIFACT = resolve('artifacts/m0/runtime.json');
 const LATIN_FONT = resolve(
   'node_modules/@fontsource/noto-sans/files/noto-sans-latin-400-normal.woff',

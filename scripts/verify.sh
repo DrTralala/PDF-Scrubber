@@ -15,7 +15,7 @@ require_m0_go() {
       found=1
       break
     fi
-  done < docs/research/m0-results.md
+  done < artifacts/m0/m0-results.md
   if [ "$found" -ne 1 ]; then
     printf '%s\n' 'M0 report does not contain an exact ## Decision: GO heading' >&2
     return 1
