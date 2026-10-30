@@ -4,6 +4,7 @@ import { createServer } from 'node:net';
 import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { pathToFileURL } from 'node:url';
 
@@ -20,6 +21,7 @@ import {
 
 const DEBUG_START_TIMEOUT_MS = 45_000;
 const APP_SHUTDOWN_TIMEOUT_MS = 15_000;
+const ELECTRON_DIAGNOSTIC_PREFIX = 'PDF_SCRUBBER_DIAG ';
 
 async function main(): Promise<void> {
   if (process.platform !== 'win32') {
@@ -43,21 +45,40 @@ export async function smokePortableExecutable(executable: string, fixture: strin
   await (await import('node:fs/promises')).mkdir(downloadDirectory);
 
   const debugPort = await reserveLoopbackPort();
+  process.stdout.write(`PDF_SCRUBBER_SMOKE ${JSON.stringify({
+    event: 'runner-start',
+    platform: process.platform,
+    githubActions: process.env.GITHUB_ACTIONS === 'true',
+    windowsRunner: process.env.RUNNER_OS === 'Windows',
+    cdpNoDefaults: true,
+    smokeSaveDirectoryArgumentProvided: true,
+  })}\n`);
   const child = spawn(executable, [
     `--remote-debugging-port=${debugPort}`,
     '--remote-debugging-address=127.0.0.1',
     `--pdf-scrubber-smoke-save-dir=${downloadDirectory}`,
-  ], { stdio: 'ignore', windowsHide: true });
+  ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const capturedElectronDiagnostics: string[] = [];
+  const stdoutCapture = child.stdout === null
+    ? undefined
+    : captureDiagnostics(child.stdout, capturedElectronDiagnostics);
+  const stderrCapture = child.stderr === null
+    ? undefined
+    : captureDiagnostics(child.stderr, capturedElectronDiagnostics);
   let browser: Browser | undefined;
   let page: Page | undefined;
+  let playwrightDownloadObserved = false;
 
   try {
     await once(child as unknown as NodeJS.EventEmitter, 'spawn');
     const endpoint = await waitForCdpEndpoint(debugPort, child);
-    browser = await chromium.connectOverCDP(endpoint);
+    browser = await connectElectronBrowser(endpoint);
     const context = browser.contexts()[0];
     if (context === undefined) throw new Error('Portable app did not expose a browser context');
     page = await waitForEditorPage(context);
+    page.on('download', () => {
+      playwrightDownloadObserved = true;
+    });
 
     const remoteRequests = await installNoNetworkGuard(page);
     const rendererCapabilities = await page.evaluate(() => ({
@@ -101,6 +122,10 @@ export async function smokePortableExecutable(executable: string, fixture: strin
       `Portable output read ${pdf.getPageCount()} page(s); edited text verified in ${downloadPath}.\n`,
     );
   } finally {
+    process.stdout.write(`PDF_SCRUBBER_SMOKE ${JSON.stringify({
+      event: 'playwright-download-observation',
+      observed: playwrightDownloadObserved,
+    })}\n`);
     if (page !== undefined && !page.isClosed()) await page.close().catch(() => undefined);
     if (browser !== undefined) await browser.close().catch(() => undefined);
     let cdpShutdownError: unknown;
@@ -120,9 +145,84 @@ export async function smokePortableExecutable(executable: string, fixture: strin
     } catch (error) {
       cdpShutdownError ??= error;
     }
+    await drainDiagnosticReaders([
+      ...(stdoutCapture === undefined ? [] : [stdoutCapture.completed]),
+      ...(stderrCapture === undefined ? [] : [stderrCapture.completed]),
+    ], () => {
+      stdoutCapture?.reader.close();
+      stderrCapture?.reader.close();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+    }, 250);
+    await emitElectronDiagnostics(downloadDirectory, capturedElectronDiagnostics);
     await rm(temporaryRoot, { recursive: true, force: true });
     if (cdpShutdownError !== undefined) throw cdpShutdownError;
   }
+}
+
+type CdpConnector = Pick<typeof chromium, 'connectOverCDP'>;
+
+export async function connectElectronBrowser(
+  endpoint: string,
+  connector: CdpConnector = chromium,
+): Promise<Browser> {
+  // Electron owns its DownloadItem/save path; Playwright's default CDP override redirects downloads to its temp folder.
+  return connector.connectOverCDP(endpoint, { noDefaults: true });
+}
+
+function captureDiagnostics(
+  stream: NodeJS.ReadableStream,
+  records: string[],
+): Readonly<{
+  reader: ReturnType<typeof createInterface>;
+  completed: Promise<void>;
+}> {
+  const reader = createInterface({ input: stream });
+  const completed = (async () => {
+    for await (const line of reader) {
+      if (!line.startsWith(ELECTRON_DIAGNOSTIC_PREFIX)) continue;
+      records.push(line.slice(ELECTRON_DIAGNOSTIC_PREFIX.length));
+      if (records.length > 100) records.shift();
+    }
+  })();
+  return Object.freeze({ reader, completed });
+}
+
+export async function drainDiagnosticReaders(
+  readers: readonly Promise<unknown>[],
+  closeStreams: () => void,
+  timeoutMs = 250,
+): Promise<void> {
+  closeStreams();
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      Promise.all(readers).then(() => undefined, () => undefined),
+      new Promise<void>((resolvePromise) => {
+        timer = setTimeout(resolvePromise, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+async function emitElectronDiagnostics(directory: string, captured: readonly string[]): Promise<void> {
+  const path = join(directory, 'desktop-diagnostics.jsonl');
+  const diagnostics = await readFile(path, 'utf8').catch(() => '');
+  if (diagnostics.length > 0) {
+    process.stdout.write('Electron download diagnostics (metadata only):\n');
+    process.stdout.write(diagnostics);
+    return;
+  }
+  if (captured.length > 0) {
+    process.stdout.write('Electron stdout/stderr diagnostics (metadata only; file unavailable):\n');
+    for (const record of captured) process.stdout.write(`${record}\n`);
+    return;
+  }
+  process.stdout.write(
+    'No Electron diagnostic records were captured; check the app-start smoke-environment and save-switch fields.\n',
+  );
 }
 
 async function reserveLoopbackPort(): Promise<number> {

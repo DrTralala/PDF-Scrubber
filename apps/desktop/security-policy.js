@@ -1,4 +1,6 @@
 const NETWORK_PROTOCOLS = new Set(['ftp:', 'http:', 'https:', 'ws:', 'wss:']);
+const DIAGNOSTIC_TRUNCATION_LINE = `${JSON.stringify({ event: 'truncated' })}\n`;
+const DIAGNOSTIC_TRUNCATION_BYTES = Buffer.byteLength(DIAGNOSTIC_TRUNCATION_LINE, 'utf8');
 
 export function createSecureWebPreferences() {
   return Object.freeze({
@@ -52,4 +54,67 @@ export function isAllowedDesktopDownload({ isMainWindow, initiatorOrigin, mimeTy
     && userGesture === true
     && typeof initiatorOrigin === 'string'
     && isAllowedEditorURL(initiatorOrigin, editorOrigin);
+}
+
+export function createDesktopDownloadDiagnostic(input, editorOrigin) {
+  const initiatorOriginPresent = typeof input.initiatorOrigin === 'string'
+    && input.initiatorOrigin.length > 0;
+  return Object.freeze({
+    event: input.phase,
+    isMainWindow: input.isMainWindow,
+    initiatorOriginPresent,
+    initiatorIsEditor: initiatorOriginPresent
+      && isAllowedEditorURL(input.initiatorOrigin, editorOrigin),
+    mimeType: input.mimeType,
+    userGesture: input.userGesture,
+    policyAccepted: isAllowedDesktopDownload({
+      isMainWindow: input.isMainWindow,
+      initiatorOrigin: input.initiatorOrigin,
+      mimeType: input.mimeType,
+      userGesture: input.userGesture,
+    }, editorOrigin),
+    smokeSaveMode: input.smokeSaveMode,
+    ...(input.state === undefined ? {} : { state: input.state }),
+    ...(input.receivedBytes === undefined ? {} : { receivedBytes: input.receivedBytes }),
+    ...(input.totalBytes === undefined ? {} : { totalBytes: input.totalBytes }),
+  });
+}
+
+export function createBoundedDiagnosticWriter(writeLine, options = {}) {
+  const maxRecords = options.maxRecords ?? 64;
+  const maxBytes = options.maxBytes ?? 16_384;
+  if (!Number.isSafeInteger(maxRecords) || maxRecords < 1) {
+    throw new RangeError('maxRecords must be a positive safe integer');
+  }
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < DIAGNOSTIC_TRUNCATION_BYTES) {
+    throw new RangeError(`maxBytes must be at least ${DIAGNOSTIC_TRUNCATION_BYTES}`);
+  }
+
+  let recordCount = 0;
+  let bytesWritten = 0;
+  let truncated = false;
+  const emit = (line) => {
+    writeLine(line);
+    recordCount += 1;
+    bytesWritten += Buffer.byteLength(line, 'utf8');
+  };
+
+  return (record) => {
+    if (truncated) return false;
+    const line = `${JSON.stringify(record)}\n`;
+    const lineBytes = Buffer.byteLength(line, 'utf8');
+    const canWriteRecord = recordCount < maxRecords - 1
+      && bytesWritten + lineBytes + DIAGNOSTIC_TRUNCATION_BYTES <= maxBytes;
+    if (canWriteRecord) {
+      emit(line);
+      return true;
+    }
+
+    truncated = true;
+    if (recordCount < maxRecords
+      && bytesWritten + DIAGNOSTIC_TRUNCATION_BYTES <= maxBytes) {
+      emit(DIAGNOSTIC_TRUNCATION_LINE);
+    }
+    return false;
+  };
 }

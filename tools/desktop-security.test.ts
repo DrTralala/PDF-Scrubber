@@ -1,6 +1,8 @@
 import { expect, test } from 'vitest';
 
 import {
+  createBoundedDiagnosticWriter,
+  createDesktopDownloadDiagnostic,
   createSecureWebPreferences,
   isAllowedDesktopDownload,
   isAllowedEditorURL,
@@ -62,6 +64,65 @@ test('accepts only user-triggered PDF downloads from the main editor window', ()
     mimeType: 'application/pdf',
     userGesture: false,
   }, editorOrigin)).toBe(false);
+});
+
+test('download diagnostics preserve decision metadata without including filenames or PDF data', () => {
+  const diagnostic = createDesktopDownloadDiagnostic({
+    phase: 'done',
+    isMainWindow: true,
+    initiatorOrigin: editorOrigin,
+    mimeType: 'application/pdf',
+    userGesture: true,
+    smokeSaveMode: true,
+    state: 'completed',
+    receivedBytes: 512,
+    totalBytes: 512,
+  }, editorOrigin);
+
+  expect(diagnostic).toEqual({
+    event: 'done',
+    isMainWindow: true,
+    initiatorOriginPresent: true,
+    initiatorIsEditor: true,
+    mimeType: 'application/pdf',
+    userGesture: true,
+    policyAccepted: true,
+    smokeSaveMode: true,
+    state: 'completed',
+    receivedBytes: 512,
+    totalBytes: 512,
+  });
+  expect(JSON.stringify(diagnostic)).not.toMatch(/filename|pdfBytes|documentText/i);
+});
+
+test('caps diagnostic line count and bytes while marking truncated output once', () => {
+  const lines: string[] = [];
+  const writer = createBoundedDiagnosticWriter((line) => lines.push(line), {
+    maxRecords: 4,
+    maxBytes: 512,
+  });
+
+  for (let index = 0; index < 100; index += 1) {
+    writer({ event: 'updated', state: 'progressing', receivedBytes: index });
+  }
+
+  expect(lines).toHaveLength(4);
+  expect(lines.at(-1)).toBe('{"event":"truncated"}\n');
+  expect(Buffer.byteLength(lines.join(''), 'utf8')).toBeLessThanOrEqual(512);
+  expect(writer({ event: 'later' })).toBe(false);
+  expect(lines).toHaveLength(4);
+});
+
+test('replaces an oversized diagnostic record with a bounded truncation marker', () => {
+  const lines: string[] = [];
+  const writer = createBoundedDiagnosticWriter((line) => lines.push(line), {
+    maxRecords: 4,
+    maxBytes: 48,
+  });
+
+  expect(writer({ event: 'updated', detail: 'x'.repeat(10_000) })).toBe(false);
+  expect(lines).toEqual(['{"event":"truncated"}\n']);
+  expect(Buffer.byteLength(lines.join(''), 'utf8')).toBeLessThanOrEqual(48);
 });
 
 test('keeps renderer Node access and insecure web features disabled', () => {

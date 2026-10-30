@@ -102,6 +102,10 @@ jobs:
         working-directory: .
         run: npm ci
 
+      - name: Generate synthetic product smoke fixtures
+        working-directory: .
+        run: npm run build:fixtures
+
       - name: Install tagged editor dependencies
         working-directory: editor-source
         run: npm ci
