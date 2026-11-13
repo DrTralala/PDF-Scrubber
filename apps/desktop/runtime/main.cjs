@@ -2,6 +2,12 @@ const { app, BrowserWindow, dialog, Menu } = require('electron');
 const { appendFileSync } = require('node:fs');
 const { basename, dirname, isAbsolute, join, resolve } = require('node:path');
 const { pathToFileURL } = require('node:url');
+const {
+  configurePortableApp,
+  preflightPortableStorage,
+  preparePortableStorage,
+} = require('./portable-storage.cjs');
+const { createSmokeDiagnosticSink } = require('./smoke-diagnostics.cjs');
 
 let mainWindow;
 let editorOrigin;
@@ -11,10 +17,38 @@ let isWindowsSmokeRun = false;
 let smokeSaveDirectory = '';
 let diagnosticsPath;
 let diagnosticWriter;
-let diagnosticFileWriteFailed = false;
 let shutdownStarted = false;
 
 app.setName('PDF-Scrubber');
+
+let portablePaths;
+try {
+  const portableRoot = resolve(dirname(process.execPath), '..', '..');
+  const launcherRoot = process.env.PDF_SCRUBBER_PORTABLE_ROOT;
+  const requestedUserData = app.commandLine.getSwitchValue('user-data-dir');
+  if (launcherRoot === undefined
+    || !samePortablePath(launcherRoot, portableRoot)
+    || !samePortablePath(requestedUserData, join(portableRoot, 'config', 'profile'))) {
+    throw new Error('The portable launcher is required. Start the root PDF-Scrubber.exe from the extracted application folder; the inner runtime executable cannot be launched directly.');
+  }
+
+  preflightPortableStorage(portableRoot);
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+  } else {
+    portablePaths = preparePortableStorage(portableRoot);
+    configurePortableApp(app, portablePaths);
+  }
+} catch (error) {
+  portablePaths = undefined;
+  const detail = error instanceof Error ? error.message : String(error);
+  console.error('PDF-Scrubber portable storage bootstrap failed', error);
+  dialog.showErrorBox(
+    'PDF-Scrubber could not start',
+    `${detail}\n\nMove the complete application folder to a writable location and start its root PDF-Scrubber.exe.`,
+  );
+  app.exit(1);
+}
 
 app.on('web-contents-created', (_event, contents) => {
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -37,25 +71,67 @@ app.on('before-quit', (event) => {
   staticServer = undefined;
   void serverToClose.close().catch((error) => {
     console.error('Failed to close the local editor server', error);
-  }).finally(() => app.quit());
-});
-
-app.whenReady().then(startDesktopEditor).catch((error) => {
-  writeSmokeDiagnostic({
-    event: 'startup-error',
-    errorName: error instanceof Error ? error.name : 'UnknownError',
-    errorCode: error !== null && typeof error === 'object' && 'code' in error
-      ? String(error.code)
-      : 'none',
+  }).finally(() => {
+    writeSmokeDiagnostic({ event: 'portable-shutdown' });
+    app.quit();
   });
-  console.error('PDF-Scrubber failed to start', error);
-  dialog.showErrorBox('PDF-Scrubber could not start', 'The local editor could not be opened.');
-  app.quit();
 });
 
-async function startDesktopEditor() {
+if (portablePaths !== undefined) {
+  app.on('second-instance', () => {
+    if (mainWindow === undefined) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  });
+
+  app.whenReady().then(() => startDesktopEditor(portablePaths)).catch((error) => {
+    void exitAfterEditorStartupFailure(error);
+  });
+}
+
+async function exitAfterEditorStartupFailure(error) {
+  try {
+    writeSmokeDiagnostic({
+      event: 'startup-error',
+      errorName: error instanceof Error ? error.name : 'UnknownError',
+      errorCode: error !== null && typeof error === 'object' && 'code' in error
+        ? String(error.code)
+        : 'none',
+    });
+    console.error('PDF-Scrubber failed to start', error);
+    dialog.showErrorBox('PDF-Scrubber could not start', 'The local editor could not be opened.');
+  } finally {
+    const serverToClose = staticServer;
+    staticServer = undefined;
+    try {
+      if (serverToClose !== undefined) await serverToClose.close();
+    } catch (closeError) {
+      console.error('Failed to close the local editor server after startup failure', closeError);
+    } finally {
+      app.exit(1);
+    }
+  }
+}
+
+async function startDesktopEditor(paths) {
+  const { settings } = paths;
   securityPolicy = await import('./security-policy.js');
   configureSmokeDiagnostics();
+  writeSmokeDiagnostic({
+    event: 'portable-managed-paths',
+    processId: process.pid,
+    root: paths.root,
+    userData: app.getPath('userData'),
+    sessionData: app.getPath('sessionData'),
+    temp: app.getPath('temp'),
+    logs: app.getPath('logs'),
+    crashDumps: app.getPath('crashDumps'),
+    tempEnvironment: {
+      TMP: process.env.TMP ?? '',
+      TEMP: process.env.TEMP ?? '',
+      TMPDIR: process.env.TMPDIR ?? '',
+    },
+  });
   Menu.setApplicationMenu(null);
   const { startStaticServer } = await import(
     pathToFileURL(join(app.getAppPath(), 'server.mjs')).href
@@ -70,8 +146,8 @@ async function startDesktopEditor() {
 
   mainWindow = new BrowserWindow({
     title: 'PDF-Scrubber',
-    width: 1280,
-    height: 860,
+    width: settings.window.width,
+    height: settings.window.height,
     minWidth: 760,
     minHeight: 560,
     show: false,
@@ -79,11 +155,32 @@ async function startDesktopEditor() {
   });
 
   configureEditorSession(mainWindow);
-  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.once('ready-to-show', () => {
+    const bounds = mainWindow?.getBounds();
+    if (bounds !== undefined) {
+      writeSmokeDiagnostic({
+        event: 'portable-window-ready',
+        requestedWidth: settings.window.width,
+        requestedHeight: settings.window.height,
+        width: bounds.width,
+        height: bounds.height,
+        minWidth: 760,
+        minHeight: 560,
+      });
+    }
+    mainWindow?.show();
+  });
   mainWindow.on('closed', () => {
     mainWindow = undefined;
   });
   await mainWindow.loadURL(staticServer.url);
+}
+
+function samePortablePath(first, second) {
+  if (typeof first !== 'string' || first.length === 0) return false;
+  const normalizedFirst = resolve(first).replace(/[\\/]+$/, '').toLowerCase();
+  const normalizedSecond = resolve(second).replace(/[\\/]+$/, '').toLowerCase();
+  return normalizedFirst === normalizedSecond;
 }
 
 function configureEditorSession(window) {
@@ -175,16 +272,11 @@ function configureSmokeDiagnostics() {
   diagnosticsPath = smokeSaveDirectory.length > 0
     ? join(smokeSaveDirectory, 'desktop-diagnostics.jsonl')
     : undefined;
-  diagnosticWriter = securityPolicy.createBoundedDiagnosticWriter((line) => {
-    process.stdout.write(`PDF_SCRUBBER_DIAG ${line}`);
-    if (diagnosticsPath === undefined || diagnosticFileWriteFailed) return;
-    try {
-      appendFileSync(diagnosticsPath, line, { encoding: 'utf8' });
-    } catch {
-      diagnosticFileWriteFailed = true;
-      process.stdout.write('PDF_SCRUBBER_DIAG {"event":"diagnostic-file-write-failed"}\n');
-    }
-  }, { maxRecords: 64, maxBytes: 16_384 });
+  diagnosticWriter = createSmokeDiagnosticSink({
+    diagnosticsPath,
+    appendFile: appendFileSync,
+    createBoundedDiagnosticWriter: securityPolicy.createBoundedDiagnosticWriter,
+  }).write;
   writeSmokeDiagnostic({
     event: 'app-start',
     electronVersion: process.versions.electron,

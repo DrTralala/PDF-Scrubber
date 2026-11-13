@@ -131,26 +131,27 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run build:portable --workspace @pdf-editor/desktop
 
-      - name: Smoke-test the portable executable and finalise assets
+      - name: Smoke-test the final portable .7z archive and finalise assets
         shell: pwsh
         run: |
-          $executables = @(Get-ChildItem -LiteralPath 'artifacts/desktop/output' -Filter '*.exe' -File)
-          if ($executables.Count -ne 1) { throw "Expected one portable EXE, found $($executables.Count)." }
-          $executable = $executables[0].FullName
+          $archives = @(Get-ChildItem -LiteralPath 'artifacts/desktop/output' -Filter '*.7z' -File)
+          if ($archives.Count -ne 1) { throw "Expected one final portable .7z archive, found $($archives.Count)." }
+          $archive = $archives[0]
           $fixture = (Resolve-Path 'fixtures/generated/01-simple-tj.pdf').Path
-          npm run desktop:smoke -- --executable $executable --fixture $fixture
-          if ($LASTEXITCODE -ne 0) { throw 'The portable executable smoke test failed.' }
-          Copy-Item -LiteralPath 'artifacts/desktop/package-input/provenance.json' -Destination 'artifacts/desktop/output/provenance.json'
-          $hash = (Get-FileHash -LiteralPath $executable -Algorithm SHA256).Hash.ToLowerInvariant()
-          "$hash  $([IO.Path]::GetFileName($executable))" | Out-File -LiteralPath "$executable.sha256" -Encoding ascii
+          npm run desktop:smoke -- --archive "$($archive.FullName)" --fixture "$fixture"
+          if ($LASTEXITCODE -ne 0) { throw 'Portable archive smoke failed.' }
+          Copy-Item -LiteralPath 'artifacts/desktop/package-input/provenance.json' `
+            -Destination 'artifacts/desktop/output/provenance.json' -Force
+          $hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($archive.Name)" | Out-File -LiteralPath "$($archive.FullName).sha256" -Encoding ascii
 
       - name: Upload tested portable build artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.identities.outputs.artifact_name }}
           path: |
-            artifacts/desktop/output/*.exe
-            artifacts/desktop/output/*.exe.sha256
+            artifacts/desktop/output/*.7z
+            artifacts/desktop/output/*.7z.sha256
             artifacts/desktop/output/provenance.json
           if-no-files-found: error
           compression-level: 0
@@ -184,17 +185,20 @@ jobs:
             '.editor.tag == $tag and .editor.sha == $editor and .packaging.sha == $packaging' \
             release-assets/provenance.json >/dev/null
 
-          mapfile -t executables < <(printf '%s\n' release-assets/*.exe)
-          [[ ${#executables[@]} -eq 1 && -f "${executables[0]}" ]]
-          executable=${executables[0]}
-          checksum="$executable.sha256"
-          [[ -f "$checksum" ]]
+          mapfile -t archives < <(printf '%s\n' release-assets/*.7z)
+          [[ ${#archives[@]} -eq 1 && -f "${archives[0]}" ]]
+          archive=${archives[0]}
+          mapfile -t checksums < <(printf '%s\n' release-assets/*.7z.sha256)
+          [[ ${#checksums[@]} -eq 1 && -f "${checksums[0]}" ]]
+          checksum="${archive}.sha256"
+          [[ "$checksum" == "${checksums[0]}" && -f "$checksum" ]]
           expected_hash=$(awk 'NR == 1 { print $1 }' "$checksum")
-          actual_hash=$(sha256sum "$executable" | awk '{ print $1 }')
-          [[ "$expected_hash" == "$actual_hash" ]]
+          expected_name=$(awk 'NR == 1 { print $2 }' "$checksum")
+          actual_hash=$(sha256sum "$archive" | awk '{ print $1 }')
+          [[ "$expected_hash" == "$actual_hash" && "$expected_name" == "$(basename "$archive")" ]]
 
           existing_assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
-          for asset in "$executable" "$checksum" release-assets/provenance.json; do
+          for asset in "$archive" "$checksum" release-assets/provenance.json; do
             name=$(basename "$asset")
             if printf '%s\n' "$existing_assets" | awk -v name="$name" '$0 == name { found = 1 } END { exit !found }'; then
               printf 'Refusing to overwrite existing release asset: %s\n' "$name" >&2
@@ -202,5 +206,5 @@ jobs:
             fi
           done
 
-          gh release upload "$RELEASE_TAG" "$executable" "$checksum" release-assets/provenance.json \
+          gh release upload "$RELEASE_TAG" "$archive" "$checksum" release-assets/provenance.json \
             --repo "$GITHUB_REPOSITORY"

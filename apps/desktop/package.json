@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:portable": "electron-builder --config electron-builder.config.cjs --win portable --x64"
+    "build:portable": "powershell -NoProfile -ExecutionPolicy Bypass -File build-portable.ps1"
   },
   "devDependencies": {
     "electron": "45.1.0",

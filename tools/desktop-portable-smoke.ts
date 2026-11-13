@@ -1,393 +1,147 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { createServer } from 'node:net';
-import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { createInterface } from 'node:readline';
-import { setTimeout as delay } from 'node:timers/promises';
+import { basename, dirname, join, resolve } from 'node:path';
+import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
-import { chromium, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
-import { PDFDocument } from 'pdf-lib';
-import { analysePage, ObjectStore, PROVISIONAL_LIMITS } from '@pdf-editor/pdf-engine';
+import { expect } from '@playwright/test';
 
-import { installNoNetworkGuard } from './check-no-network';
 import {
-  acceptRichFontSubstitutions,
-  activateByKeyboard,
-  expandAllowedWidth,
-} from '../apps/web/tests/editor-interactions';
+  archiveName,
+  assertPortableArchiveFile,
+  assertPortableArchivePaths,
+  assertPortableProvenance,
+  assertPortableRootEntries,
+  parsePortableSmokeArguments,
+  parseSevenZipEntries,
+  portableArchiveVersion,
+} from './desktop-portable-archive';
+import { runPortableLifecycle } from './desktop-portable-lifecycle';
 
-const DEBUG_START_TIMEOUT_MS = 45_000;
-const APP_SHUTDOWN_TIMEOUT_MS = 15_000;
-const ELECTRON_DIAGNOSTIC_PREFIX = 'PDF_SCRUBBER_DIAG ';
+const execFileAsync = promisify(execFile);
+
+export { connectElectronBrowser, drainDiagnosticReaders } from './desktop-portable-session';
 
 async function main(): Promise<void> {
   if (process.platform !== 'win32') {
-    throw new Error('Portable executable smoke testing must run on Windows');
+    throw new Error('Portable archive lifecycle smoke testing must run on Windows');
+  }
+  if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_OS !== 'Windows') {
+    throw new Error('Portable archive lifecycle smoke requires a Windows GitHub Actions runner for bounded diagnostics.');
   }
 
-  const options = parseArguments(process.argv.slice(2));
-  const executable = resolve(requiredOption(options, 'executable'));
-  const fixture = resolve(requiredOption(options, 'fixture'));
-  const [executableStats, fixtureStats] = await Promise.all([stat(executable), stat(fixture)]);
-  if (!executableStats.isFile()) throw new Error(`Portable executable is not a file: ${executable}`);
+  const options = parsePortableSmokeArguments(process.argv.slice(2));
+  const archive = resolve(options.archive);
+  const fixture = resolve(options.fixture);
+  assertPortableArchiveFile(archive);
+  const fixtureStats = await stat(fixture);
   if (!fixtureStats.isFile()) throw new Error(`Smoke fixture is not a file: ${fixture}`);
 
-  await smokePortableExecutable(executable, fixture);
-  process.stdout.write('Portable Windows app edit/download smoke passed.\n');
+  await smokePortableArchive(archive, fixture);
+  process.stdout.write('Portable Windows archive lifecycle smoke passed.\n');
 }
 
-export async function smokePortableExecutable(executable: string, fixture: string): Promise<void> {
+export async function smokePortableArchive(archive: string, fixture: string): Promise<void> {
+  assertPortableArchiveFile(archive);
   const temporaryRoot = await mkdtemp(join(tmpdir(), 'pdf-scrubber-desktop-smoke-'));
-  const downloadDirectory = join(temporaryRoot, 'downloads');
-  await (await import('node:fs/promises')).mkdir(downloadDirectory);
-
-  const debugPort = await reserveLoopbackPort();
-  process.stdout.write(`PDF_SCRUBBER_SMOKE ${JSON.stringify({
-    event: 'runner-start',
-    platform: process.platform,
-    githubActions: process.env.GITHUB_ACTIONS === 'true',
-    windowsRunner: process.env.RUNNER_OS === 'Windows',
-    cdpNoDefaults: true,
-    smokeSaveDirectoryArgumentProvided: true,
-  })}\n`);
-  const child = spawn(executable, [
-    `--remote-debugging-port=${debugPort}`,
-    '--remote-debugging-address=127.0.0.1',
-    `--pdf-scrubber-smoke-save-dir=${downloadDirectory}`,
-  ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-  const capturedElectronDiagnostics: string[] = [];
-  const stdoutCapture = child.stdout === null
-    ? undefined
-    : captureDiagnostics(child.stdout, capturedElectronDiagnostics);
-  const stderrCapture = child.stderr === null
-    ? undefined
-    : captureDiagnostics(child.stderr, capturedElectronDiagnostics);
-  let browser: Browser | undefined;
-  let page: Page | undefined;
-  let playwrightDownloadObserved = false;
-
   try {
-    await once(child as unknown as NodeJS.EventEmitter, 'spawn');
-    const endpoint = await waitForCdpEndpoint(debugPort, child);
-    browser = await connectElectronBrowser(endpoint);
-    const context = browser.contexts()[0];
-    if (context === undefined) throw new Error('Portable app did not expose a browser context');
-    page = await waitForEditorPage(context);
-    page.on('download', () => {
-      playwrightDownloadObserved = true;
+    const sevenZip = await findSevenZip();
+    const listing = await execFileAsync(sevenZip, ['l', '-slt', archive], {
+      maxBuffer: 16 * 1024 * 1024,
+      windowsHide: true,
+    });
+    const archivePaths = parseSevenZipEntries(listing.stdout);
+    assertPortableArchivePaths(archivePaths);
+
+    const extractionDirectory = join(temporaryRoot, 'extracted');
+    await mkdir(extractionDirectory);
+    await execFileAsync(sevenZip, ['x', '-t7z', '-y', `-o${extractionDirectory}`, archive], {
+      maxBuffer: 8 * 1024 * 1024,
+      windowsHide: true,
     });
 
-    const remoteRequests = await installNoNetworkGuard(page);
-    const rendererCapabilities = await page.evaluate(() => ({
-      require: typeof (window as Window & { require?: unknown }).require,
-      process: typeof (window as Window & { process?: unknown }).process,
-    }));
-    expect(rendererCapabilities).toEqual({ require: 'undefined', process: 'undefined' });
+    const applicationRoot = join(extractionDirectory, 'PDF-Scrubber');
+    const rootStats = await lstat(applicationRoot);
+    if (rootStats.isSymbolicLink() || !rootStats.isDirectory()) {
+      throw new Error('Archive did not extract its single regular PDF-Scrubber/ directory.');
+    }
+    await assertNoReparseTree(applicationRoot);
+    assertPortableRootEntries(await readdir(applicationRoot));
+    if (archiveName(portableArchiveVersion(archive)) !== basename(archive)) {
+      throw new Error('Portable archive filename does not match the required stable naming contract.');
+    }
 
-    await page.getByLabel('Open PDF').setInputFiles(fixture);
-    await expect(page.getByTestId('pdf-canvas')).toBeVisible({ timeout: 20_000 });
+    const configDirectory = join(applicationRoot, 'config');
+    const runtimeExecutable = join(configDirectory, 'runtime', 'PDF-Scrubber.exe');
+    const launcherExecutable = join(applicationRoot, 'PDF-Scrubber.exe');
+    const settingsPath = join(applicationRoot, 'settings.json');
+    const embeddedProvenancePath = join(configDirectory, 'provenance.json');
+    const sidecarProvenancePath = join(dirname(archive), 'provenance.json');
+    for (const requiredPath of [
+      launcherExecutable,
+      runtimeExecutable,
+      settingsPath,
+      embeddedProvenancePath,
+      sidecarProvenancePath,
+    ]) {
+      const details = await stat(requiredPath);
+      if (!details.isFile()) throw new Error(`Portable archive contract file is not a file: ${requiredPath}`);
+    }
 
-    await activateByKeyboard(page, page.getByRole('button', { name: /Target 01 — Editable/ }));
-    await page.getByLabel('Edit selected text').fill('Portable desktop edit');
-    await expandAllowedWidth(page);
-    await acceptRichFontSubstitutions(page);
-    const apply = page.getByRole('button', { name: 'Apply replacement' });
-    await expect(apply).toBeEnabled({ timeout: 20_000 });
-    await apply.click();
-    await expect(page.getByRole('button', { name: /Portable desktop edit — Editable/ }))
-      .toBeVisible({ timeout: 20_000 });
+    const [embeddedProvenance, sidecarProvenance, initialSettings] = await Promise.all([
+      readJsonFile(embeddedProvenancePath),
+      readJsonFile(sidecarProvenancePath),
+      readJsonFile(settingsPath),
+    ]);
+    assertPortableProvenance(embeddedProvenance, sidecarProvenance, basename(archive));
+    expect(initialSettings).toEqual({
+      schemaVersion: 1,
+      window: { width: 1280, height: 860 },
+    });
 
-    await page.getByRole('button', { name: 'Download copy' }).click();
-    const downloadPath = await waitForDownloadedPdf(downloadDirectory);
-    const bytes = new Uint8Array(await readFile(downloadPath));
-    const pdf = await PDFDocument.load(bytes);
-    expect(pdf.getPageCount()).toBeGreaterThan(0);
-
-    const objectStore = await ObjectStore.open(bytes, PROVISIONAL_LIMITS);
-    const pageAnalysis = await analysePage(objectStore, 0);
-    const pageText = pageAnalysis.spans.map(({ unicode }) => unicode ?? '').join(' ');
-    expect(pageText).toContain('Portable desktop edit');
-    expect(remoteRequests).toEqual([]);
-
-    await page.close();
-    page = undefined;
-    await browser.close().catch(() => undefined);
-    browser = undefined;
-    await waitForCdpShutdown(debugPort, APP_SHUTDOWN_TIMEOUT_MS);
-    await waitForChildExit(child, APP_SHUTDOWN_TIMEOUT_MS);
-    process.stdout.write(
-      `Portable output read ${pdf.getPageCount()} page(s); edited text verified in ${downloadPath}.\n`,
-    );
+    await runPortableLifecycle({
+      archive,
+      temporaryRoot,
+      applicationRoot,
+      fixture,
+    });
   } finally {
-    process.stdout.write(`PDF_SCRUBBER_SMOKE ${JSON.stringify({
-      event: 'playwright-download-observation',
-      observed: playwrightDownloadObserved,
-    })}\n`);
-    if (page !== undefined && !page.isClosed()) await page.close().catch(() => undefined);
-    if (browser !== undefined) await browser.close().catch(() => undefined);
-    let cdpShutdownError: unknown;
-    try {
-      await waitForCdpShutdown(debugPort, APP_SHUTDOWN_TIMEOUT_MS);
-    } catch (error) {
-      cdpShutdownError = error;
-    }
-    try {
-      if (child.exitCode === null && child.signalCode === null) {
-        try {
-          await waitForChildExit(child, APP_SHUTDOWN_TIMEOUT_MS);
-        } catch {
-          await terminateOwnedChild(child);
-        }
-      }
-    } catch (error) {
-      cdpShutdownError ??= error;
-    }
-    await drainDiagnosticReaders([
-      ...(stdoutCapture === undefined ? [] : [stdoutCapture.completed]),
-      ...(stderrCapture === undefined ? [] : [stderrCapture.completed]),
-    ], () => {
-      stdoutCapture?.reader.close();
-      stderrCapture?.reader.close();
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-    }, 250);
-    await emitElectronDiagnostics(downloadDirectory, capturedElectronDiagnostics);
     await rm(temporaryRoot, { recursive: true, force: true });
-    if (cdpShutdownError !== undefined) throw cdpShutdownError;
   }
 }
 
-type CdpConnector = Pick<typeof chromium, 'connectOverCDP'>;
-
-export async function connectElectronBrowser(
-  endpoint: string,
-  connector: CdpConnector = chromium,
-): Promise<Browser> {
-  // Electron owns its DownloadItem/save path; Playwright's default CDP override redirects downloads to its temp folder.
-  return connector.connectOverCDP(endpoint, { noDefaults: true });
-}
-
-function captureDiagnostics(
-  stream: NodeJS.ReadableStream,
-  records: string[],
-): Readonly<{
-  reader: ReturnType<typeof createInterface>;
-  completed: Promise<void>;
-}> {
-  const reader = createInterface({ input: stream });
-  const completed = (async () => {
-    for await (const line of reader) {
-      if (!line.startsWith(ELECTRON_DIAGNOSTIC_PREFIX)) continue;
-      records.push(line.slice(ELECTRON_DIAGNOSTIC_PREFIX.length));
-      if (records.length > 100) records.shift();
-    }
-  })();
-  return Object.freeze({ reader, completed });
-}
-
-export async function drainDiagnosticReaders(
-  readers: readonly Promise<unknown>[],
-  closeStreams: () => void,
-  timeoutMs = 250,
-): Promise<void> {
-  closeStreams();
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    await Promise.race([
-      Promise.all(readers).then(() => undefined, () => undefined),
-      new Promise<void>((resolvePromise) => {
-        timer = setTimeout(resolvePromise, timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
-
-async function emitElectronDiagnostics(directory: string, captured: readonly string[]): Promise<void> {
-  const path = join(directory, 'desktop-diagnostics.jsonl');
-  const diagnostics = await readFile(path, 'utf8').catch(() => '');
-  if (diagnostics.length > 0) {
-    process.stdout.write('Electron download diagnostics (metadata only):\n');
-    process.stdout.write(diagnostics);
-    return;
-  }
-  if (captured.length > 0) {
-    process.stdout.write('Electron stdout/stderr diagnostics (metadata only; file unavailable):\n');
-    for (const record of captured) process.stdout.write(`${record}\n`);
-    return;
-  }
-  process.stdout.write(
-    'No Electron diagnostic records were captured; check the app-start smoke-environment and save-switch fields.\n',
-  );
-}
-
-async function reserveLoopbackPort(): Promise<number> {
-  const server = createServer();
-  const listening = once(server as unknown as NodeJS.EventEmitter, 'listening');
-  server.listen(0, '127.0.0.1');
-  await listening;
-  const address = server.address();
-  if (address === null || typeof address === 'string') {
-    await closeNetServer(server);
-    throw new Error('Could not reserve a loopback debugging port');
-  }
-  const port = address.port;
-  await closeNetServer(server);
-  return port;
-}
-
-async function waitForCdpEndpoint(port: number, child: ChildProcess): Promise<string> {
-  const endpoint = `http://127.0.0.1:${port}`;
-  const deadline = Date.now() + DEBUG_START_TIMEOUT_MS;
-  while (Date.now() < deadline) {
+async function findSevenZip(): Promise<string> {
+  const candidates = [process.env.PDF_SCRUBBER_7Z, '7z.exe', '7z']
+    .filter((candidate): candidate is string => candidate !== undefined && candidate.length > 0);
+  for (const candidate of candidates) {
     try {
-      const response = await fetch(`${endpoint}/json/version`, {
-        signal: AbortSignal.timeout(1_000),
-      });
-      if (response.ok) {
-        const details = await response.json() as { webSocketDebuggerUrl?: unknown };
-        if (typeof details.webSocketDebuggerUrl === 'string') return endpoint;
-      }
+      await execFileAsync(candidate, ['i'], { timeout: 10_000, maxBuffer: 1024 * 1024, windowsHide: true });
+      return candidate;
     } catch {
-      // The packaged launcher may need several seconds to unpack its portable image.
+      // Try the next already-installed command name; this smoke never installs tooling.
     }
-    if (child.exitCode !== null || child.signalCode !== null) {
-      throw new Error(`Portable app exited before the debugging endpoint appeared (${child.exitCode})`);
+  }
+  throw new Error('Could not find the existing 7-Zip command used to build the portable archive.');
+}
+
+async function readJsonFile(path: string): Promise<unknown> {
+  return JSON.parse(await readFile(path, 'utf8')) as unknown;
+}
+
+async function assertNoReparseTree(directory: string): Promise<void> {
+  const visit = async (current: string): Promise<void> => {
+    const details = await lstat(current);
+    if (details.isSymbolicLink()) {
+      throw new Error(`Portable archive contains a reparse point: ${current}`);
     }
-    await delay(200);
-  }
-  throw new Error(`Portable app did not expose its loopback debugging endpoint: ${endpoint}`);
-}
-
-async function waitForCdpShutdown(port: number, timeoutMs: number): Promise<void> {
-  const endpoint = `http://127.0.0.1:${port}/json/version`;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(endpoint, { signal: AbortSignal.timeout(1_000) });
-      if (response.ok) {
-        await delay(100);
-        continue;
-      }
-    } catch {
-      return;
+    if (!details.isDirectory()) return;
+    for (const entry of await readdir(current, { withFileTypes: true })) {
+      await visit(join(current, entry.name));
     }
-    await delay(100);
-  }
-  throw new Error('Portable app left its loopback debugging endpoint running after shutdown');
-}
-
-async function waitForEditorPage(context: BrowserContext): Promise<Page> {
-  const deadline = Date.now() + DEBUG_START_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    const page = context.pages().find((candidate) => {
-      try {
-        return new URL(candidate.url()).hostname === '127.0.0.1';
-      } catch {
-        return false;
-      }
-    });
-    if (page !== undefined) {
-      await page.waitForLoadState('domcontentloaded', { timeout: DEBUG_START_TIMEOUT_MS });
-      return page;
-    }
-    await delay(100);
-  }
-  throw new Error('Portable app did not open the local PDF-Scrubber editor');
-}
-
-async function waitForDownloadedPdf(directory: string): Promise<string> {
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    const files = (await readdir(directory)).filter((file) => file.toLowerCase().endsWith('.pdf'));
-    if (files.length === 1) {
-      const path = join(directory, files[0]!);
-      const fileStats = await stat(path);
-      if (fileStats.size > 0) return path;
-    }
-    if (files.length > 1) throw new Error('Portable app wrote multiple PDFs for one download action');
-    await delay(100);
-  }
-  throw new Error('Portable app did not save the edited PDF');
-}
-
-async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    assertChildExitedSuccessfully(child);
-    return;
-  }
-  const controller = new AbortController();
-  let timer: NodeJS.Timeout | undefined;
-  const emitter = child as unknown as NodeJS.EventEmitter;
-  const closed = once(emitter, 'close', { signal: controller.signal });
-  const failed = once(emitter, 'error', { signal: controller.signal })
-    .then(([error]) => Promise.reject(error));
-  try {
-    await Promise.race([
-      closed,
-      failed,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error('Portable app process did not exit after its window was closed')),
-          timeoutMs,
-        );
-      }),
-    ]);
-    assertChildExitedSuccessfully(child);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-    controller.abort();
-  }
-}
-
-function assertChildExitedSuccessfully(child: ChildProcess): void {
-  if (child.exitCode !== 0 || child.signalCode !== null) {
-    throw new Error(
-      `Portable app process did not shut down cleanly (exit=${String(child.exitCode)}, signal=${String(child.signalCode)})`,
-    );
-  }
-}
-
-async function terminateOwnedChild(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) return;
-  if (!child.kill()) throw new Error('Could not signal the portable app process launched by this smoke test');
-  await waitForChildExit(child, 5_000);
-}
-
-function closeNetServer(server: ReturnType<typeof createServer>): Promise<void> {
-  return new Promise((resolvePromise, reject) => {
-    server.close((error) => (error ? reject(error) : resolvePromise()));
-  });
-}
-
-function parseArguments(arguments_: readonly string[]): Map<string, string> {
-  const values = new Map<string, string>();
-  for (let index = 0; index < arguments_.length; index += 1) {
-    const argument = arguments_[index];
-    if (argument === undefined || !argument.startsWith('--')) {
-      throw new Error(`Unexpected argument: ${String(argument)}`);
-    }
-    const separatorIndex = argument.indexOf('=');
-    const name = separatorIndex < 0 ? argument.slice(2) : argument.slice(2, separatorIndex);
-    const value = separatorIndex < 0 ? arguments_[index + 1] : argument.slice(separatorIndex + 1);
-    if (value === undefined || value.length === 0 || value.startsWith('--')) {
-      throw new Error(`Missing value for --${name}`);
-    }
-    if (values.has(name)) throw new Error(`Duplicate option: --${name}`);
-    values.set(name, value);
-    if (separatorIndex < 0) index += 1;
-  }
-  return values;
-}
-
-function requiredOption(values: Map<string, string>, name: string): string {
-  const value = values.get(name);
-  if (value === undefined) throw new Error(`Required option is missing: --${name}`);
-  return value;
+  };
+  await visit(directory);
 }
 
 const invokedPath = process.argv[1];

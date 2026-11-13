@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+
 import { expect, test } from 'vitest';
 
 import {
@@ -9,6 +11,25 @@ import {
   isAllowedNetworkRequest,
   isAllowedSessionPermission,
 } from '../apps/desktop/security-policy.js';
+
+type SmokeDiagnosticSink = Readonly<{
+  write(record: Readonly<Record<string, unknown>>): boolean;
+  fileWriteFailed(): boolean;
+}>;
+
+type SmokeDiagnosticDependencies = Readonly<{
+  diagnosticsPath?: string;
+  appendFile(path: string, line: string, options: Readonly<{ encoding: 'utf8' }>): void;
+  createBoundedDiagnosticWriter(
+    writeLine: (line: string) => void,
+    options: Readonly<{ maxRecords: number; maxBytes: number }>,
+  ): (record: Readonly<Record<string, unknown>>) => boolean;
+}>;
+
+const require = createRequire(import.meta.url);
+const smokeDiagnostics = require('../apps/desktop/runtime/smoke-diagnostics.cjs') as Readonly<{
+  createSmokeDiagnosticSink(dependencies: SmokeDiagnosticDependencies): SmokeDiagnosticSink;
+}>;
 
 const editorOrigin = 'http://127.0.0.1:43127';
 
@@ -123,6 +144,70 @@ test('replaces an oversized diagnostic record with a bounded truncation marker',
   expect(writer({ event: 'updated', detail: 'x'.repeat(10_000) })).toBe(false);
   expect(lines).toEqual(['{"event":"truncated"}\n']);
   expect(Buffer.byteLength(lines.join(''), 'utf8')).toBeLessThanOrEqual(48);
+});
+
+test('persists bounded diagnostics without touching an unavailable GUI stdout handle', () => {
+  const persisted: Array<Readonly<{ path: string; line: string }>> = [];
+  const callOrder: string[] = [];
+  let bounds: Readonly<{ maxRecords: number; maxBytes: number }> | undefined;
+  const sink = smokeDiagnostics.createSmokeDiagnosticSink({
+    diagnosticsPath: 'desktop-diagnostics.jsonl',
+    appendFile(path, line) {
+      callOrder.push('file');
+      persisted.push({ path, line });
+    },
+    createBoundedDiagnosticWriter(writeLine, options) {
+      bounds = options;
+      return (record) => {
+        writeLine(`${JSON.stringify(record)}\n`);
+        return true;
+      };
+    },
+  });
+
+  const originalStdoutWrite = process.stdout.write;
+  let sinkThrew = false;
+  process.stdout.write = (() => {
+    throw new Error('GUI child has no inherited stdout handle');
+  }) as typeof process.stdout.write;
+  try {
+    sink.write({ event: 'portable-window-ready', width: 1280, height: 860 });
+  } catch {
+    sinkThrew = true;
+  } finally {
+    process.stdout.write = originalStdoutWrite;
+  }
+
+  expect(sinkThrew).toBe(false);
+  expect(callOrder).toEqual(['file']);
+  expect(persisted).toEqual([{
+    path: 'desktop-diagnostics.jsonl',
+    line: '{"event":"portable-window-ready","width":1280,"height":860}\n',
+  }]);
+  expect(bounds).toEqual({ maxRecords: 64, maxBytes: 16_384 });
+  expect(sink.fileWriteFailed()).toBe(false);
+});
+
+test('records file diagnostic failures without throwing or retrying as a silent smoke pass', () => {
+  let appendAttempts = 0;
+  const sink = smokeDiagnostics.createSmokeDiagnosticSink({
+    diagnosticsPath: 'desktop-diagnostics.jsonl',
+    appendFile() {
+      appendAttempts += 1;
+      throw new Error('diagnostic directory is not writable');
+    },
+    createBoundedDiagnosticWriter(writeLine) {
+      return (record) => {
+        writeLine(`${JSON.stringify(record)}\n`);
+        return true;
+      };
+    },
+  });
+
+  expect(() => sink.write({ event: 'portable-managed-paths' })).not.toThrow();
+  expect(() => sink.write({ event: 'portable-window-ready' })).not.toThrow();
+  expect(appendAttempts).toBe(1);
+  expect(sink.fileWriteFailed()).toBe(true);
 });
 
 test('keeps renderer Node access and insecure web features disabled', () => {

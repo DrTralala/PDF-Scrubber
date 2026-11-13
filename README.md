@@ -1,7 +1,7 @@
 # PDF-Scrubber
 
 [![CI](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/verify.yml/badge.svg)](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/verify.yml)
-[![Version](https://img.shields.io/badge/version-v1.0.0-blue.svg?style=flat-square)](https://github.com/DrTralala/PDF-Scrubber/tree/v1.0.0)
+[![Version](https://img.shields.io/github/v/release/DrTralala/PDF-Scrubber?label=version&color=blue&sort=date&style=flat-square)](https://github.com/DrTralala/PDF-Scrubber/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/Node.js-24.18.0-339933.svg)](https://nodejs.org/)
 
@@ -27,10 +27,10 @@ The CLI prints a loopback URL and tries to open it in your browser. If it cannot
 
 ### Alternative installation methods
 
-To run the tagged 1.0.0 release instead of the latest published version:
+To run the pinned 1.1.0 release instead of the latest published version:
 
 ```bash
-npx pdf-scrubber@1.0.0
+npx pdf-scrubber@1.1.0
 ```
 
 To install the CLI globally instead:
@@ -85,11 +85,30 @@ The command verifies exact sizes, SHA-256 hashes, and PDF signatures for the pin
 
 ## Windows portable app
 
-Stable, non-prerelease releases build and test a Windows x64 portable executable, then attach it with a SHA-256 checksum and source provenance to the same GitHub release. When a release has these desktop assets, download `PDF-Scrubber-<version>-win-x64-portable.exe` from its Assets list; the accompanying `provenance.json` identifies the editor tag/revision and packaging revision.
+Stable, non-prerelease releases include a tested Windows x64 portable `.7z` archive, a SHA-256 checksum, and source provenance on the same GitHub release. The archive is named `PDF-Scrubber-<version>-win-x64-portable.7z` and contains one `PDF-Scrubber/` folder with this root layout:
 
-The executable is unsigned, so Windows may show a security warning. It does not require a separately installed Node.js runtime or an installer. Portable does not mean no-trace or USB-only: Electron may store ordinary per-user application and cache data on the computer.
+```text
+PDF-Scrubber/
+  PDF-Scrubber.exe
+  settings.json
+  config/
+```
 
-To build a version manually without publishing or modifying a release, open **Actions → Windows portable → Run workflow**, enter an editor tag such as `v1.0.0`, and download the completed workflow artifact. The editor is built from that tag using its lockfile; the desktop wrapper and packaging configuration come from the selected workflow revision. Manual builds do not attach files to a release. This also allows a historical editor tag to be packaged with the current wrapper without changing that tag.
+Download the archive and extract its entire `PDF-Scrubber/` folder, then run `PDF-Scrubber.exe` from that folder's root. The launcher starts the packaged Electron runtime under `config/` directly; it does not extract a runtime on launch. Moving the app means closing it and moving the entire folder. Do not copy or run only the root executable. The desktop app does not require a separately installed Node.js runtime or an installer.
+
+Application-managed runtime, profile, cache, logs, temporary files, and crash-report data stay under `config/`. The user-facing `settings.json` file is at the application root. Schema version 1 is strict: `schemaVersion` must be `1`, `window.width` must be an integer from 760 through 16384, and `window.height` must be an integer from 560 through 16384. The default settings are:
+
+```json
+{"schemaVersion":1,"window":{"width":1280,"height":860}}
+```
+
+Unknown keys, malformed or unsupported settings, and dimensions outside those bounds fail visibly; malformed or invalid settings are not silently overwritten. If `settings.json` is missing, the documented defaults are created when the folder is writable.
+
+For a manual update, close the old copy and extract the new release separately into a different folder. With both copies closed, preserve your validated `settings.json` by copying it into the new folder, and copy the old portable profile from `config/profile/` into the new folder's `config/profile/`. Do not copy old files over the new `config/runtime/`. Do not blindly overwrite your settings with shipped defaults. Existing AppData profiles are not migrated or removed automatically.
+
+The launcher is unsigned, so Windows may show a security warning. Portable does not mean no operating-system traces: Windows, drivers, security software, native dialogs, paging, or crash collection may create data outside the application folder. This is not a zero-OS-traces guarantee.
+
+To build a version manually without publishing or modifying a release, open **Actions → Windows portable → Run workflow**, enter an editor tag such as `v1.1.0`, and download the completed workflow artifact. Extract the `.7z` and run the root executable from the complete folder. The editor is built from that tag using its lockfile; the desktop wrapper and packaging configuration come from the selected workflow revision. Manual builds do not attach files to a release. This also allows a historical editor tag to be packaged with the current wrapper without changing that tag.
 
 ## PDF limits and compatibility
 

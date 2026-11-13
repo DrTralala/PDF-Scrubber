@@ -110,6 +110,8 @@ test('stages the selected editor build with the current wrapper and both source 
     writeFile(join(assets, 'index.html'), '<!doctype html><script src="/assets/app.js"></script>'),
     writeFile(join(assets, 'assets', 'app.js'), 'void 0;'),
     writeFile(join(repository, 'apps', 'desktop', 'runtime', 'main.cjs'), 'main'),
+    writeFile(join(repository, 'apps', 'desktop', 'runtime', 'portable-storage.cjs'), 'storage'),
+    writeFile(join(repository, 'apps', 'desktop', 'runtime', 'smoke-diagnostics.cjs'), 'smoke diagnostics'),
     writeFile(join(repository, 'apps', 'desktop', 'security-policy.js'), 'policy'),
     writeFile(join(repository, 'apps', 'cli', 'lib', 'server.js'), 'server'),
     writeFile(
@@ -137,6 +139,8 @@ test('stages the selected editor build with the current wrapper and both source 
   });
   await expect(readFile(join(output, 'web', 'assets', 'app.js'), 'utf8')).resolves.toBe('void 0;');
   await expect(readFile(join(output, 'main.cjs'), 'utf8')).resolves.toBe('main');
+  await expect(readFile(join(output, 'portable-storage.cjs'), 'utf8')).resolves.toBe('storage');
+  await expect(readFile(join(output, 'smoke-diagnostics.cjs'), 'utf8')).resolves.toBe('smoke diagnostics');
   await expect(readFile(join(output, 'server.mjs'), 'utf8')).resolves.toBe('server');
   await expect(readFile(join(output, 'provenance.json'), 'utf8'))
     .resolves.toContain('"packaging"');

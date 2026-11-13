@@ -14,7 +14,7 @@ npx pdf-scrubber@latest
 For a reproducible stable release:
 
 ```bash
-npx pdf-scrubber@1.0.0
+npx pdf-scrubber@1.1.0
 ```
 
 For an optional global installation:
@@ -32,6 +32,6 @@ PDF and font processing remains local to the browser; document and font bytes
 are not uploaded to a server. The GitHub source is public; see the repository
 README for source development and project checks.
 
-The reproducible command above is pinned to `pdf-scrubber@1.0.0`. The browser
+The reproducible command above is pinned to `pdf-scrubber@1.1.0`. The browser
 editor performs PDF and font processing locally after the CLI starts the local
 server.
