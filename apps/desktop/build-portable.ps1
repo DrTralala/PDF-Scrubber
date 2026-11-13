@@ -118,10 +118,11 @@ try {
   }
   $provenanceBytes = [IO.File]::ReadAllBytes($provenancePath)
   $provenance = [Text.Encoding]::UTF8.GetString($provenanceBytes) | ConvertFrom-Json
-  if ($provenance.schemaVersion -ne 1 -or $provenance.editor.version -ne $version
-      -or $provenance.editor.tag -ne "v$version"
-      -or $provenance.editor.sha -notmatch '^[0-9a-fA-F]{40}$'
-      -or $provenance.packaging.sha -notmatch '^[0-9a-fA-F]{40}$') {
+  if ($provenance.schemaVersion -ne 1 -or
+      $provenance.editor.version -ne $version -or
+      $provenance.editor.tag -ne "v$version" -or
+      $provenance.editor.sha -notmatch '^[0-9a-fA-F]{40}$' -or
+      $provenance.packaging.sha -notmatch '^[0-9a-fA-F]{40}$') {
     throw 'Prepared desktop provenance does not match its stable editor version and full source SHAs.'
   }
 
@@ -130,8 +131,9 @@ try {
   $archivePath = Join-Path $outputDirectory $archiveName
   $checksumPath = "$archivePath.sha256"
   $outputProvenance = Join-Path $outputDirectory 'provenance.json'
-  if ((Test-Path -LiteralPath $archivePath) -or (Test-Path -LiteralPath $checksumPath)
-      -or (Test-Path -LiteralPath $outputProvenance)) {
+  if ((Test-Path -LiteralPath $archivePath) -or
+      (Test-Path -LiteralPath $checksumPath) -or
+      (Test-Path -LiteralPath $outputProvenance)) {
     throw "Refusing to replace existing desktop output: $archivePath, $checksumPath, or $outputProvenance"
   }
 

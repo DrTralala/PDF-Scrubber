@@ -42,6 +42,17 @@ test('builds an unpacked Windows app before staging an ordinary .7z archive', as
   expect(buildScript).toMatch(/Get-Command|vswhere|VsDevCmd/i);
 });
 
+test('keeps multiline PowerShell boolean operators on the preceding line', async () => {
+  const scripts = await Promise.all([
+    readFile(resolve(projectRoot, 'apps/desktop/build-portable.ps1'), 'utf8'),
+    readFile(resolve(projectRoot, 'tools/desktop-portable-smoke.windows.ps1'), 'utf8'),
+  ]);
+
+  for (const script of scripts) {
+    expect(script).not.toMatch(/^\s+-(?:or|and)\b/m);
+  }
+});
+
 test('compiles a static native GUI launcher without overriding the CRT entry point', async () => {
   const launcher = await readFile(resolve(projectRoot, 'apps/desktop/launcher/main.cpp'), 'utf8');
   const buildScript = await readFile(resolve(projectRoot, 'apps/desktop/build-portable.ps1'), 'utf8');

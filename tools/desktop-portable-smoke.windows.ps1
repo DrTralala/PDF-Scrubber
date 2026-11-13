@@ -125,8 +125,8 @@ function Stop-OwnedPortableProcessTree([int] $RootId) {
       throw 'Could not verify the task-owned portable process executable before cleanup.'
     }
     $rootPath = [IO.Path]::GetFullPath([string]$rootProcess.ExecutablePath)
-    if (-not $rootPath.Equals($launcher, [StringComparison]::OrdinalIgnoreCase)
-      -and -not $rootPath.Equals($nativeRuntime, [StringComparison]::OrdinalIgnoreCase)) {
+    if (-not $rootPath.Equals($launcher, [StringComparison]::OrdinalIgnoreCase) -and
+      -not $rootPath.Equals($nativeRuntime, [StringComparison]::OrdinalIgnoreCase)) {
       throw 'Refusing to clean up a process whose executable is outside the task-owned portable root.'
     }
   }
@@ -136,8 +136,8 @@ function Stop-OwnedPortableProcessTree([int] $RootId) {
     $candidateId = [int]$candidate.ProcessId
     if ($candidateId -eq $RootId -or [string]::IsNullOrWhiteSpace([string]$candidate.ExecutablePath)) { continue }
     $candidatePath = [IO.Path]::GetFullPath([string]$candidate.ExecutablePath)
-    if ($candidatePath.Equals($nativeRuntime, [StringComparison]::OrdinalIgnoreCase)
-      -or $candidatePath.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    if ($candidatePath.Equals($nativeRuntime, [StringComparison]::OrdinalIgnoreCase) -or
+      $candidatePath.StartsWith($runtimePrefix, [StringComparison]::OrdinalIgnoreCase)) {
       Stop-Process -Id $candidateId -Force -ErrorAction SilentlyContinue
     }
   }
@@ -192,8 +192,8 @@ try {
     'ExpectError' {
       if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { $target = $launcher }
       else { $target = [IO.Path]::GetFullPath($ExecutablePath) }
-      if (-not $target.Equals($launcher, [StringComparison]::OrdinalIgnoreCase)
-        -and -not $target.Equals($nativeRuntime, [StringComparison]::OrdinalIgnoreCase)) {
+      if (-not $target.Equals($launcher, [StringComparison]::OrdinalIgnoreCase) -and
+        -not $target.Equals($nativeRuntime, [StringComparison]::OrdinalIgnoreCase)) {
         throw 'Error-path smoke may start only the task-owned root launcher or its packaged inner runtime.'
       }
       $process = Start-OwnedProcess $target
