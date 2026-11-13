@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, Menu } = require('electron');
+const { app, BrowserWindow, dialog, Menu, screen } = require('electron');
 const { appendFileSync } = require('node:fs');
 const { basename, dirname, isAbsolute, join, resolve } = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -158,12 +158,15 @@ async function startDesktopEditor(paths) {
   mainWindow.once('ready-to-show', () => {
     const bounds = mainWindow?.getBounds();
     if (bounds !== undefined) {
+      const display = screen.getDisplayMatching(bounds);
       writeSmokeDiagnostic({
         event: 'portable-window-ready',
         requestedWidth: settings.window.width,
         requestedHeight: settings.window.height,
         width: bounds.width,
         height: bounds.height,
+        displayId: display.id,
+        workArea: display.workArea,
         minWidth: 760,
         minHeight: 560,
       });

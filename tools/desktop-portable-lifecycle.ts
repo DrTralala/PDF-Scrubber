@@ -15,6 +15,7 @@ import {
 } from '../apps/web/tests/editor-interactions';
 import { installNoNetworkGuard } from './check-no-network';
 import {
+  assertPortableWindowFitsWorkArea,
   assertPortableWindow,
   assertProfileCookie,
   closePortableSession,
@@ -36,6 +37,19 @@ type PortableLifecycleInput = Readonly<{
 
 const EXPECTED_CONFIG_ENTRIES = ['crashes', 'logs', 'profile', 'provenance.json', 'runtime', 'temp'];
 
+export function chooseFittingNonDefaultWindowSize(
+  workArea: Readonly<{ width: number; height: number }>,
+): Readonly<{ width: number; height: number }> {
+  const width = Math.min(900, workArea.width);
+  const height = Math.min(640, workArea.height);
+  if (!Number.isInteger(width) || width < 760 || !Number.isInteger(height) || height < 560) {
+    throw new Error(
+      `Observed display work area ${workArea.width}x${workArea.height} cannot fit a non-default portable window above 760x560.`,
+    );
+  }
+  return Object.freeze({ width, height });
+}
+
 export async function runPortableLifecycle(input: PortableLifecycleInput): Promise<void> {
   let applicationRoot = input.applicationRoot;
   let runtimeDirectory = join(applicationRoot, 'config', 'runtime');
@@ -49,10 +63,6 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
   const appDataBefore = await snapshotLegacyAppData();
   const profileCookie = `pdf-scrubber-${randomUUID()}`;
   const profileCookieValue = randomUUID();
-  const customSettings = Buffer.from(`${JSON.stringify({
-    schemaVersion: 1,
-    window: { width: 1200, height: 800 },
-  }, null, 2)}\n`, 'utf8');
 
   const openSession = async (): Promise<AppSession> => {
     const session = await openPortableSession(launcherExecutable, applicationRoot, input.temporaryRoot);
@@ -69,7 +79,12 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
     const firstStart = Date.now();
     const first = await openSession();
     firstReadyMs = Date.now() - firstStart;
-    await assertPortableWindow(first, 1280, 860);
+    const firstWindow = await assertPortableWindow(first, 1280, 860);
+    const customWindowSize = chooseFittingNonDefaultWindowSize(firstWindow.workArea);
+    const customSettings = Buffer.from(`${JSON.stringify({
+      schemaVersion: 1,
+      window: customWindowSize,
+    }, null, 2)}\n`, 'utf8');
     const remoteRequests = await installNoNetworkGuard(first.page);
     const rendererCapabilities = await first.page.evaluate(() => ({
       require: typeof (window as Window & { require?: unknown }).require,
@@ -129,7 +144,8 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
     settingsPath = join(applicationRoot, 'settings.json');
 
     const moved = await openSession();
-    await assertPortableWindow(moved, 1200, 800);
+    const movedWindow = await assertPortableWindow(moved, customWindowSize.width, customWindowSize.height);
+    assertPortableWindowFitsWorkArea(movedWindow, customWindowSize.width, customWindowSize.height);
     await assertProfileCookie(moved, profileCookie, profileCookieValue);
     await closeSession();
     expect(await readFile(settingsPath)).toEqual(customSettings);
@@ -137,7 +153,8 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
     await assertRuntimeUnchanged(runtimeDirectory, runtimeInventory);
 
     const primary = await openSession();
-    await assertPortableWindow(primary, 1200, 800);
+    const primaryWindow = await assertPortableWindow(primary, customWindowSize.width, customWindowSize.height);
+    assertPortableWindowFitsWorkArea(primaryWindow, customWindowSize.width, customWindowSize.height);
     const concurrentPort = await reserveLoopbackPort();
     const concurrentChild = spawnSecondLauncher(launcherExecutable, concurrentPort);
     await once(concurrentChild as unknown as NodeJS.EventEmitter, 'spawn');
@@ -154,7 +171,16 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
       '-Port', String(await reserveLoopbackPort()),
     ]);
     const afterForcedExit = await openSession();
-    await assertPortableWindow(afterForcedExit, 1200, 800);
+    const afterForcedExitWindow = await assertPortableWindow(
+      afterForcedExit,
+      customWindowSize.width,
+      customWindowSize.height,
+    );
+    assertPortableWindowFitsWorkArea(
+      afterForcedExitWindow,
+      customWindowSize.width,
+      customWindowSize.height,
+    );
     await assertProfileCookie(afterForcedExit, profileCookie, profileCookieValue);
     await closeSession();
 

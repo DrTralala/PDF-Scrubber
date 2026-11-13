@@ -28,6 +28,18 @@ export type AppSession = {
   closed: boolean;
 };
 
+export type PortableWindowDiagnostic = Readonly<{
+  event: 'portable-window-ready';
+  requestedWidth: number;
+  requestedHeight: number;
+  width: number;
+  height: number;
+  displayId: number;
+  workArea: Readonly<{ x: number; y: number; width: number; height: number }>;
+  minWidth: 760;
+  minHeight: 560;
+}>;
+
 type CdpConnector = Pick<typeof chromium, 'connectOverCDP'>;
 
 export async function openPortableSession(
@@ -124,20 +136,78 @@ export function assertPortableShutdownDiagnostic(records: readonly Record<string
   }
 }
 
-export async function assertPortableWindow(session: AppSession, width: number, height: number): Promise<void> {
+export async function assertPortableWindow(
+  session: AppSession,
+  width: number,
+  height: number,
+): Promise<PortableWindowDiagnostic> {
   const record = await waitForDiagnosticRecord(
     () => readElectronDiagnostics(session),
     'portable-window-ready',
     { child: session.child },
   );
+  return assertPortableWindowRecord(record, width, height);
+}
+
+export function assertPortableWindowRecord(
+  record: Readonly<Record<string, unknown>>,
+  width: number,
+  height: number,
+): PortableWindowDiagnostic {
+  if (!Number.isSafeInteger(record.displayId)) {
+    throw new Error('Portable window diagnostic is missing a valid display identity.');
+  }
+  const workAreaValue = record.workArea;
+  if (workAreaValue === null || typeof workAreaValue !== 'object') {
+    throw new Error('Portable window diagnostic is missing the observed display work area.');
+  }
+  const workArea = workAreaValue as Record<string, unknown>;
+  for (const name of ['x', 'y', 'width', 'height']) {
+    if (typeof workArea[name] !== 'number' || !Number.isInteger(workArea[name])) {
+      throw new Error(`Portable window diagnostic has an invalid display work-area ${name}.`);
+    }
+  }
+  const workAreaWidth = workArea.width as number;
+  const workAreaHeight = workArea.height as number;
+  if (workAreaWidth < 760 || workAreaHeight < 560) {
+    throw new Error(
+      `Observed display work area ${workAreaWidth}x${workAreaHeight} is smaller than the portable window minimum 760x560.`,
+    );
+  }
   expect(record).toMatchObject({
+    event: 'portable-window-ready',
     requestedWidth: width,
     requestedHeight: height,
-    width,
-    height,
+    displayId: expect.any(Number),
     minWidth: 760,
     minHeight: 560,
   });
+  const expectedWidth = Math.min(width, workAreaWidth);
+  const expectedHeight = Math.min(height, workAreaHeight);
+  expect(record.width,
+    `actual width must equal requested ${width} clipped to work-area width ${workAreaWidth}`)
+    .toBe(expectedWidth);
+  expect(record.height,
+    `actual height must equal requested ${height} clipped to work-area height ${workAreaHeight}`)
+    .toBe(expectedHeight);
+  return record as PortableWindowDiagnostic;
+}
+
+export function assertPortableWindowFitsWorkArea(
+  record: PortableWindowDiagnostic,
+  width: number,
+  height: number,
+): void {
+  if (width > record.workArea.width || height > record.workArea.height) {
+    throw new Error(
+      `Custom portable window ${width}x${height} does not fit observed display work area `
+      + `${record.workArea.width}x${record.workArea.height}.`,
+    );
+  }
+  expect(record.requestedWidth).toBe(width);
+  expect(record.requestedHeight).toBe(height);
+  expect(record.width).toBe(width);
+  expect(record.height).toBe(height);
 }
 
 export async function waitForDiagnosticRecord(

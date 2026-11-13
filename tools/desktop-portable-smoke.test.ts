@@ -7,7 +7,10 @@ import { expect, test } from 'vitest';
 
 import { chromium, type Browser } from '@playwright/test';
 
+import { chooseFittingNonDefaultWindowSize } from './desktop-portable-lifecycle';
 import {
+  assertPortableWindowFitsWorkArea,
+  assertPortableWindowRecord,
   assertPortableShutdownDiagnostic,
   waitForDiagnosticRecord,
 } from './desktop-portable-session';
@@ -81,12 +84,56 @@ test('requires a file-backed shutdown diagnostic so failed diagnostic writes can
   ])).not.toThrow();
 });
 
+test('accepts requested dimensions clamped exactly to the observed Electron display work area', () => {
+  const observedWindow = {
+    event: 'portable-window-ready',
+    requestedWidth: 1280,
+    requestedHeight: 860,
+    width: 1024,
+    height: 720,
+    displayId: 1,
+    minWidth: 760,
+    minHeight: 560,
+    workArea: { x: 0, y: 0, width: 1024, height: 720 },
+  };
+
+  expect(assertPortableWindowRecord(observedWindow, 1280, 860)).toEqual(observedWindow);
+  expect(() => assertPortableWindowRecord({ ...observedWindow, requestedWidth: 1024 }, 1280, 860))
+    .toThrow();
+  expect(() => assertPortableWindowRecord({ ...observedWindow, width: 1023 }, 1280, 860))
+    .toThrow();
+});
+
+test('chooses a genuinely fitting non-default custom window size from the observed work area', () => {
+  const custom = chooseFittingNonDefaultWindowSize({ width: 1024, height: 720 });
+  expect(custom).toEqual({ width: 900, height: 640 });
+  expect(chooseFittingNonDefaultWindowSize({ width: 800, height: 600 }))
+    .toEqual({ width: 800, height: 600 });
+  const customRecord = assertPortableWindowRecord({
+    event: 'portable-window-ready',
+    requestedWidth: custom.width,
+    requestedHeight: custom.height,
+    width: custom.width,
+    height: custom.height,
+    displayId: 1,
+    minWidth: 760,
+    minHeight: 560,
+    workArea: { x: 0, y: 0, width: 1024, height: 720 },
+  }, custom.width, custom.height);
+  expect(customRecord).toMatchObject({ width: 900, height: 640 });
+  expect(() => assertPortableWindowFitsWorkArea(customRecord, 900, 640)).not.toThrow();
+  expect(() => assertPortableWindowFitsWorkArea(customRecord, 1200, 800)).toThrow(/does not fit/);
+  expect(() => chooseFittingNonDefaultWindowSize({ width: 759, height: 560 })).toThrow();
+});
+
 test('routes Electron CI diagnostics to the file-backed sink without direct stdout writes', async () => {
   const main = await readFile(join(import.meta.dirname, '../apps/desktop/runtime/main.cjs'), 'utf8');
 
   expect(main).toContain("require('./smoke-diagnostics.cjs')");
   expect(main).toContain('appendFile: appendFileSync');
   expect(main).toContain("event: 'portable-shutdown'");
+  expect(main).toContain('screen.getDisplayMatching(bounds)');
+  expect(main).toContain('workArea: display.workArea');
   expect(main).not.toContain('process.stdout.write');
 });
 
