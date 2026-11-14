@@ -7,6 +7,11 @@ on:
         description: Stable editor tag to package (for example, v1.0.0)
         required: true
         type: string
+      lock_diagnostics:
+        description: On manual runs, use Microsoft Sysinternals Handle if portable-app relocation fails
+        required: false
+        default: false
+        type: boolean
   release:
     types: [published]
 
@@ -131,7 +136,132 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npm run build:portable --workspace @pdf-editor/desktop
 
-      - name: Smoke-test the final portable .7z archive and finalise assets
+      - name: Prepare Microsoft Sysinternals Handle for optional relocation diagnostics
+        id: handle
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.lock_diagnostics }}
+        shell: pwsh
+        env:
+          PDF_SCRUBBER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          if ($env:PDF_SCRUBBER_RUNNER_ENVIRONMENT -ne 'github-hosted') {
+            throw 'Handle diagnostics are restricted to an ephemeral GitHub-hosted runner.'
+          }
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            throw 'Handle diagnostics require an administrator token on the ephemeral runner.'
+          }
+
+          $availableHandle = Get-Command 'Handle64.exe' -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $availableHandle) {
+            $toolRoot = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP "pdf-scrubber-handle-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"))
+            if (Test-Path -LiteralPath $toolRoot) {
+              throw 'Refusing to reuse an existing Handle diagnostic temporary directory.'
+            }
+            New-Item -ItemType Directory -Path $toolRoot -ErrorAction Stop | Out-Null
+            "cleanup_root=$toolRoot" >> $env:GITHUB_OUTPUT
+            $archive = Join-Path $toolRoot 'Handle.zip'
+            $extractRoot = Join-Path $toolRoot 'extracted'
+            Invoke-WebRequest -Uri 'https://download.sysinternals.com/files/Handle.zip' -OutFile $archive
+            Expand-Archive -LiteralPath $archive -DestinationPath $extractRoot -ErrorAction Stop
+            $handleExecutable = Join-Path $extractRoot 'Handle64.exe'
+          } else {
+            $handleExecutable = $availableHandle.Source
+          }
+
+          if (-not (Test-Path -LiteralPath $handleExecutable -PathType Leaf)) {
+            throw 'The 64-bit Microsoft Sysinternals Handle executable is unavailable.'
+          }
+          $signature = Get-AuthenticodeSignature -FilePath $handleExecutable
+          $signerName = if ($null -eq $signature.SignerCertificate) {
+            ''
+          } else {
+            $signature.SignerCertificate.GetNameInfo(
+              [Security.Cryptography.X509Certificates.X509NameType]::SimpleName,
+              $false
+            )
+          }
+          if ($signature.Status.ToString() -ne 'Valid' -or $signerName -ne 'Microsoft Corporation') {
+            throw "Handle Authenticode verification failed (status=$($signature.Status), signer=$signerName)."
+          }
+          $fileVersion = (Get-Item -LiteralPath $handleExecutable).VersionInfo.FileVersion
+          $productVersion = (Get-Item -LiteralPath $handleExecutable).VersionInfo.ProductVersion
+          $sha256 = (Get-FileHash -LiteralPath $handleExecutable -Algorithm SHA256).Hash.ToLowerInvariant()
+          Write-Host "Sysinternals Handle64 FileVersion=$fileVersion ProductVersion=$productVersion SHA256=$sha256"
+
+          $binaryBytes = [IO.File]::ReadAllBytes($handleExecutable)
+          $asciiStrings = [Text.Encoding]::ASCII.GetString($binaryBytes)
+          $unicodeStrings = [Text.Encoding]::Unicode.GetString($binaryBytes)
+          $supportsAcceptEula = $asciiStrings -match '(?i)-accepteula' -or
+            $unicodeStrings -match '(?i)-accepteula'
+          $probeArguments = [Collections.Generic.List[string]]::new()
+          if ($supportsAcceptEula) { $probeArguments.Add('-accepteula') }
+          $probeName = "pdf-scrubber-handle-preflight-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $probeArguments.Add('-a')
+          $probeArguments.Add($probeName)
+
+          $startInfo = [Diagnostics.ProcessStartInfo]::new()
+          $startInfo.FileName = [IO.Path]::GetFullPath($handleExecutable)
+          $startInfo.Arguments = $probeArguments -join ' '
+          $startInfo.UseShellExecute = $false
+          $startInfo.CreateNoWindow = $true
+          $startInfo.RedirectStandardOutput = $true
+          $startInfo.RedirectStandardError = $true
+          $probeProcess = [Diagnostics.Process]::new()
+          $probeProcess.StartInfo = $startInfo
+          try {
+            if (-not $probeProcess.Start()) { throw 'Handle selected-argument preflight could not start.' }
+            $stdoutTask = $probeProcess.StandardOutput.ReadToEndAsync()
+            $stderrTask = $probeProcess.StandardError.ReadToEndAsync()
+            if (-not $probeProcess.WaitForExit(10000)) {
+              $probeProcess.Kill()
+              [void]$probeProcess.WaitForExit(5000)
+              throw 'Handle selected-argument preflight exceeded 10 seconds.'
+            }
+            $probeProcess.WaitForExit()
+            $probeOutput = $stdoutTask.GetAwaiter().GetResult() + $stderrTask.GetAwaiter().GetResult()
+            if ($probeOutput.Length -gt 65536) {
+              throw 'Handle selected-argument preflight exceeded its 64 KiB output limit.'
+            }
+            $preflightLines = @(
+              ($probeOutput -split '\r?\n') |
+                ForEach-Object { $_.Trim() } |
+                Where-Object { $_.Length -gt 0 }
+            )
+            $canonicalNoMatch = 'No matching handles found.'
+            $acceptedExitCodes = @(0, 1)
+            $hasCanonicalNoMatch = $preflightLines -ccontains $canonicalNoMatch
+            $acceptedExitCode = $probeProcess.ExitCode -in $acceptedExitCodes
+            $hasPreflightError = @(
+              $preflightLines | Where-Object {
+                $_ -match '(?i)(?:\busage\b|\bunknown\b|\binvalid\b|\berror\b|\bfailed\b|license agreement|end user license)'
+              }
+            ).Count -gt 0
+            if (-not $acceptedExitCode -or -not $hasCanonicalNoMatch -or $hasPreflightError) {
+              throw "Handle preflight did not return the exact canonical no-match line with exit code 0 or 1 (exit=$($probeProcess.ExitCode))."
+            }
+          } finally {
+            $probeProcess.Dispose()
+          }
+          Write-Host 'Handle selected -a and object-name search arguments passed the bounded binary preflight.'
+          "handle_exe=$([IO.Path]::GetFullPath($handleExecutable))" >> $env:GITHUB_OUTPUT
+
+      - name: Smoke-test the final portable .7z archive with Handle diagnostics
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.lock_diagnostics }}
+        shell: pwsh
+        env:
+          PDF_SCRUBBER_HANDLE_EXE: ${{ steps.handle.outputs.handle_exe }}
+        run: |
+          $archives = @(Get-ChildItem -LiteralPath 'artifacts/desktop/output' -Filter '*.7z' -File)
+          if ($archives.Count -ne 1) { throw "Expected one final portable .7z archive, found $($archives.Count)." }
+          $archive = $archives[0]
+          $fixture = (Resolve-Path 'fixtures/generated/01-simple-tj.pdf').Path
+          npm run desktop:smoke -- --archive "$($archive.FullName)" --fixture "$fixture"
+          if ($LASTEXITCODE -ne 0) { throw 'Portable archive smoke failed.' }
+
+      - name: Smoke-test the final portable .7z archive without Handle diagnostics
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.lock_diagnostics == false }}
         shell: pwsh
         run: |
           $archives = @(Get-ChildItem -LiteralPath 'artifacts/desktop/output' -Filter '*.7z' -File)
@@ -140,10 +270,35 @@ jobs:
           $fixture = (Resolve-Path 'fixtures/generated/01-simple-tj.pdf').Path
           npm run desktop:smoke -- --archive "$($archive.FullName)" --fixture "$fixture"
           if ($LASTEXITCODE -ne 0) { throw 'Portable archive smoke failed.' }
+
+      - name: Finalise tested portable archive assets
+        shell: pwsh
+        run: |
+          $archives = @(Get-ChildItem -LiteralPath 'artifacts/desktop/output' -Filter '*.7z' -File)
+          if ($archives.Count -ne 1) { throw "Expected one final portable .7z archive, found $($archives.Count)." }
+          $archive = $archives[0]
           Copy-Item -LiteralPath 'artifacts/desktop/package-input/provenance.json' `
             -Destination 'artifacts/desktop/output/provenance.json' -Force
           $hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $($archive.Name)" | Out-File -LiteralPath "$($archive.FullName).sha256" -Encoding ascii
+
+      - name: Clean up task-owned Handle download
+        if: ${{ always() && github.event_name == 'workflow_dispatch' && inputs.lock_diagnostics }}
+        shell: pwsh
+        env:
+          HANDLE_TEMP_ROOT: ${{ steps.handle.outputs.cleanup_root }}
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:HANDLE_TEMP_ROOT)) {
+            $ownedRoot = [IO.Path]::GetFullPath($env:HANDLE_TEMP_ROOT)
+            $expectedName = "pdf-scrubber-handle-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+            $expectedRoot = [IO.Path]::GetFullPath((Join-Path $env:RUNNER_TEMP $expectedName))
+            if (-not $ownedRoot.Equals($expectedRoot, [StringComparison]::OrdinalIgnoreCase)) {
+              throw 'Refusing to clean a Handle path outside this run-owned RUNNER_TEMP subtree.'
+            }
+            if (Test-Path -LiteralPath $ownedRoot) {
+              Remove-Item -LiteralPath $ownedRoot -Recurse -Force -ErrorAction Stop
+            }
+          }
 
       - name: Upload tested portable build artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

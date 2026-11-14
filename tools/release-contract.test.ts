@@ -300,9 +300,13 @@ test('Windows portable workflow smoke-tests the final archive before checksummin
 
   expectInOrder(workflow, [
     'Build unsigned Windows x64 portable executable',
-    'Smoke-test the final portable .7z archive and finalise assets',
+    'Prepare Microsoft Sysinternals Handle for optional relocation diagnostics',
+    'Smoke-test the final portable .7z archive with Handle diagnostics',
     'npm run desktop:smoke -- --archive "$($archive.FullName)" --fixture "$fixture"',
     "if ($LASTEXITCODE -ne 0) { throw 'Portable archive smoke failed.' }",
+    'Smoke-test the final portable .7z archive without Handle diagnostics',
+    'npm run desktop:smoke -- --archive "$($archive.FullName)" --fixture "$fixture"',
+    'Finalise tested portable archive assets',
     'Copy-Item -LiteralPath',
     '$hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()',
     'Upload tested portable build artifact',
@@ -325,6 +329,10 @@ test('Windows portable workflow smoke-tests the final archive before checksummin
   expect(workflow).toContain("if: ${{ github.event_name == 'release' && !github.event.release.prerelease }}");
   expect(workflow).toContain("types: [published]");
   expect(workflow).toContain('workflow_dispatch:');
+  expect(workflow).toMatch(/lock_diagnostics:[\s\S]*?default: false[\s\S]*?type: boolean/);
+  expect(workflow).toContain('if: ${{ github.event_name == \'workflow_dispatch\' && inputs.lock_diagnostics }}');
+  expect(workflow).toContain('if: ${{ always() && github.event_name == \'workflow_dispatch\' && inputs.lock_diagnostics }}');
+  expect(workflow.match(/PDF_SCRUBBER_HANDLE_EXE:/g)).toHaveLength(1);
   expect(portableBuild).toContain("'MSVC dumpbin.exe is required to inspect the compiled launcher imports; no tool was installed.'");
   expect(portableBuild).toContain('/dependents $launcherExecutable');
   expect(portableBuild).toContain('/dependents $packagedLauncher');
@@ -336,6 +344,21 @@ test('Windows portable workflow smoke-tests the final archive before checksummin
   expect(runtimeMain).toContain('requestedWidth: settings.window.width');
   expect(runtimeMain).toContain('requestedHeight: settings.window.height');
   expect(publishWorkflow).toContain('npm publish --workspace pdf-scrubber');
+});
+
+test('maps runner identity explicitly and accepts only a canonical Handle preflight no-match', async () => {
+  const workflow = await readFile(resolve(projectRoot, '.github/workflows/desktop.yml'), 'utf8');
+
+  expect(workflow).toContain('PDF_SCRUBBER_RUNNER_ENVIRONMENT: ${{ runner.environment }}');
+  expect(workflow).toContain("$env:PDF_SCRUBBER_RUNNER_ENVIRONMENT -ne 'github-hosted'");
+  expect(workflow).not.toContain('$env:RUNNER_ENVIRONMENT');
+  expect(workflow).toContain("$canonicalNoMatch = 'No matching handles found.'");
+  expect(workflow).toContain('$acceptedExitCodes = @(0, 1)');
+  expect(workflow).toContain('$hasCanonicalNoMatch = $preflightLines -ccontains $canonicalNoMatch');
+  expect(workflow).toContain('$hasPreflightError = @(');
+  expect(workflow).toContain('(?i)(?:\\busage\\b|\\bunknown\\b|\\binvalid\\b|\\berror\\b|\\bfailed\\b|license agreement|end user license)');
+  expect(workflow).toContain('$acceptedExitCode = $probeProcess.ExitCode -in $acceptedExitCodes');
+  expect(workflow).toMatch(/if \(-not \$acceptedExitCode -or -not \$hasCanonicalNoMatch -or \$hasPreflightError\)/);
 });
 
 test('OpenCode project state is ignored and untracked', async () => {

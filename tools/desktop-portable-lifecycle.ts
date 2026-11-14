@@ -14,6 +14,7 @@ import {
   expandAllowedWidth,
 } from '../apps/web/tests/editor-interactions';
 import { installNoNetworkGuard } from './check-no-network';
+import { runHandleDiagnostic, type HandleDiagnosticResult } from './desktop-handle-diagnostic';
 import {
   assertPortableWindowFitsWorkArea,
   assertPortableWindow,
@@ -47,6 +48,7 @@ type PortableRelocationDependencies = Readonly<{
   queryOwnedProcesses?: OwnedProcessQuery;
   renameDirectory?: (source: string, destination: string) => Promise<void>;
   report?: (record: Readonly<Record<string, unknown>>) => void;
+  handleDiagnostic?: (applicationRoot: string) => Promise<HandleDiagnosticResult>;
   timeoutMs?: number;
   pollIntervalMs?: number;
   now?: () => number;
@@ -97,6 +99,21 @@ export async function relocatePortableApplication(
   try {
     await (dependencies.renameDirectory ?? rename)(sourceRoot, destinationRoot);
   } catch (renameError) {
+    const configuredHandleExecutable = process.env.PDF_SCRUBBER_HANDLE_EXE;
+    const handleDiagnostic = dependencies.handleDiagnostic ?? (
+      configuredHandleExecutable === undefined || configuredHandleExecutable.length === 0
+        ? undefined
+        : (applicationRoot: string) => runHandleDiagnostic(configuredHandleExecutable, applicationRoot)
+    );
+    let handleDiagnosticResult: Readonly<Record<string, unknown>> | undefined;
+    if (handleDiagnostic !== undefined) {
+      try {
+        handleDiagnosticResult = await handleDiagnostic(sourceRoot);
+      } catch (error) {
+        handleDiagnosticResult = { status: 'failed', error: describeError(error) };
+      }
+    }
+
     let processSnapshot: OwnedProcessSnapshot | undefined;
     let processSnapshotError: Readonly<Record<string, unknown>> | undefined;
     try {
@@ -112,6 +129,7 @@ export async function relocatePortableApplication(
       sourceRoot,
       destinationRoot,
       renameError: describeError(renameError),
+      ...(handleDiagnosticResult === undefined ? {} : { handleDiagnostic: handleDiagnosticResult }),
       processSnapshot: processSnapshot ?? null,
       ...(processSnapshotError === undefined ? {} : { processSnapshotError }),
       rootAttributes,

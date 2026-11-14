@@ -322,7 +322,9 @@ test('does not replace the rename failure when the diagnostic process query also
     dest: destinationRoot,
   });
   const queryFailure = new Error('snapshot query denied');
+  const handleFailure = new Error('Handle diagnostic timed out');
   let queries = 0;
+  const events: string[] = [];
   const reports: Readonly<Record<string, unknown>>[] = [];
 
   try {
@@ -330,10 +332,18 @@ test('does not replace the rename failure when the diagnostic process query also
     const result = relocatePortableApplication(sourceRoot, destinationRoot, join(sourceRoot, 'PDF-Scrubber.exe'), {
       queryOwnedProcesses: async () => {
         queries += 1;
+        events.push(`query-${queries}`);
         if (queries === 1) return noProcesses;
         throw queryFailure;
       },
-      renameDirectory: async () => { throw renameFailure; },
+      renameDirectory: async () => {
+        events.push('rename');
+        throw renameFailure;
+      },
+      handleDiagnostic: async () => {
+        events.push('handle');
+        throw handleFailure;
+      },
       report: (record) => { reports.push(record); },
       now: () => 0,
       sleep: async () => undefined,
@@ -348,9 +358,14 @@ test('does not replace the rename failure when the diagnostic process query also
       processSnapshotError: expect.objectContaining({ message: 'snapshot query denied' }),
     });
     expect(queries).toBe(2);
+    expect(events).toEqual(['query-1', 'rename', 'handle', 'query-2']);
     expect(reports.find(({ event }) => event === 'portable-relocation-failed')).toMatchObject({
       renameError: { code: 'EPERM' },
       processSnapshotError: { message: 'snapshot query denied' },
+      handleDiagnostic: {
+        status: 'failed',
+        error: { message: 'Handle diagnostic timed out' },
+      },
     });
   } finally {
     await rm(temporaryRoot, { recursive: true, force: true });
