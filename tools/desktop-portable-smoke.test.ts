@@ -228,8 +228,12 @@ test('retains owned-process forced-exit checks and marks negative dialog checks 
     readFile(join(import.meta.dirname, 'desktop-portable-lifecycle.ts'), 'utf8'),
   ]);
 
-  expect(helper).toContain("[ValidateSet('ForceRuntimeExit', 'TerminateOwnedTree')]");
+  expect(helper).toContain("[ValidateSet('ForceRuntimeExit', 'SnapshotOwnedProcesses', 'TerminateOwnedTree')]");
   expect(helper).toContain('Get-OwnedProcessTree');
+  expect(helper).toContain('Get-OwnedProcessSnapshot');
+  expect(helper).toContain('StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)');
+  expect(helper).toContain('$executablePath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)');
+  expect(helper).toContain('creationTime = $creationTime');
   expect(helper).toContain('Get-OwnedProcessExitCode');
   expect(helper).toContain('if ($exitCode -isnot [int])');
   expect(helper).toContain('[void]$process.Handle');
@@ -237,6 +241,7 @@ test('retains owned-process forced-exit checks and marks negative dialog checks 
   expect(helper).toContain('$runtimePath.Equals($nativeRuntime');
   expect(helper).toContain('finally {');
   expect(helper).not.toMatch(/ExpectedText|ExpectError|ExpectUnwritableProfile|Wait-ForOwnedErrorDialog|FindVisibleWindows|UIAutomation|EncodedCommand|Add-Type/);
+  expect(helper).not.toContain('CommandLine');
   expect(helper).not.toContain('desktop-portable-dialog.windows.ps1');
 
   expect(lifecycle).toContain("automatedNegativeDialogChecks: false");
@@ -244,6 +249,7 @@ test('retains owned-process forced-exit checks and marks negative dialog checks 
   expect(lifecycle).toContain("directInnerRuntimeNegativeCheck: 'pending'");
   expect(lifecycle).not.toMatch(/ExpectError|ExpectUnwritableProfile|ExpectedText/);
   expect(lifecycle).toContain("'-Operation', 'ForceRuntimeExit'");
+  expect(lifecycle).toContain('await relocatePortableApplication(applicationRoot, movedRoot, launcherExecutable);');
   expect(lifecycle).toContain("event: 'portable-lifecycle-complete'");
   expect(lifecycle).toContain("'Portable desktop edit'");
   expect(lifecycle).toContain('remoteRequests');

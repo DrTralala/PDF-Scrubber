@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ForceRuntimeExit', 'TerminateOwnedTree')]
+  [ValidateSet('ForceRuntimeExit', 'SnapshotOwnedProcesses', 'TerminateOwnedTree')]
   [string] $Operation,
   [Parameter(Mandatory = $true)]
   [string] $ApplicationRoot,
@@ -12,6 +12,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $root = [IO.Path]::GetFullPath($ApplicationRoot)
 $launcher = [IO.Path]::GetFullPath($LauncherPath)
 $nativeRuntime = [IO.Path]::GetFullPath((Join-Path $root 'config/runtime/PDF-Scrubber.exe'))
@@ -19,6 +20,46 @@ $nativeRuntimeDirectory = [IO.Path]::GetFullPath((Join-Path $root 'config/runtim
 $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 if (-not $root.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase)) {
   throw 'Native portable smoke helpers may only operate inside the fresh task-owned extraction directory.'
+}
+
+function Normalize-WindowsPath([string] $Path) {
+  return ([IO.Path]::GetFullPath($Path)).Replace('/', '\').TrimEnd('\')
+}
+
+function Get-OwnedProcessSnapshot() {
+  $rootPrefix = (Normalize-WindowsPath $root) + '\'
+  $normalizedLauncher = Normalize-WindowsPath $launcher
+  if (-not $normalizedLauncher.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The portable launcher path must be inside the task-owned application root.'
+  }
+
+  $processes = @(Get-CimInstance -ClassName Win32_Process `
+    -Property ProcessId, ParentProcessId, ExecutablePath, CreationDate `
+    -ErrorAction Stop)
+  $records = @(
+    foreach ($candidate in $processes) {
+      if ([string]::IsNullOrWhiteSpace([string]$candidate.ExecutablePath)) { continue }
+      $executablePath = Normalize-WindowsPath ([string]$candidate.ExecutablePath)
+      if (-not $executablePath.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)) { continue }
+      $creationTime = if ($null -eq $candidate.CreationDate) { $null } else { [string]$candidate.CreationDate }
+      [ordered]@{
+        processId = [int]$candidate.ProcessId
+        parentProcessId = [int]$candidate.ParentProcessId
+        executablePath = $executablePath
+        creationTime = $creationTime
+      }
+    }
+  )
+  $records = @($records | Sort-Object -Property processId)
+  $totalCount = $records.Count
+  $truncated = $totalCount -gt 32
+  if ($truncated) { $records = @($records | Select-Object -First 32) }
+  return [ordered]@{
+    operation = 'SnapshotOwnedProcesses'
+    totalCount = $totalCount
+    truncated = $truncated
+    records = @($records)
+  }
 }
 
 function Get-OwnedProcessTree([int] $RootProcessId) {
@@ -146,9 +187,17 @@ try {
     'TerminateOwnedTree' {
       Stop-OwnedPortableProcessTree $RootProcessId
     }
+
+    'SnapshotOwnedProcesses' {
+      $snapshotJson = ConvertTo-Json -InputObject (Get-OwnedProcessSnapshot) -Compress -Depth 4
+    }
   }
 
-  Write-Output "PDF_SCRUBBER_WINDOWS_SMOKE operation=$Operation passed"
+  if ($Operation -eq 'SnapshotOwnedProcesses') {
+    Write-Output $snapshotJson
+  } else {
+    Write-Output "PDF_SCRUBBER_WINDOWS_SMOKE operation=$Operation passed"
+  }
 } finally {
   if ($null -ne $process -and -not $process.HasExited) {
     Stop-OwnedPortableProcessTree $process.Id

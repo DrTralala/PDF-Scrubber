@@ -21,9 +21,15 @@ import {
   closePortableSession,
   invokeWindowsSmokeHelper,
   openPortableSession,
+  OwnedProcessQueryError,
+  OwnedProcessShutdownError,
+  readOwnedProcessSnapshot,
   reserveLoopbackPort,
   waitForChildExit,
   waitForDownloadedPdf,
+  waitForOwnedProcessShutdown,
+  type OwnedProcessQuery,
+  type OwnedProcessSnapshot,
   type AppSession,
 } from './desktop-portable-session';
 import { assertPortableRootEntries } from './desktop-portable-archive';
@@ -36,6 +42,95 @@ type PortableLifecycleInput = Readonly<{
 }>;
 
 const EXPECTED_CONFIG_ENTRIES = ['crashes', 'logs', 'profile', 'provenance.json', 'runtime', 'temp'];
+
+type PortableRelocationDependencies = Readonly<{
+  queryOwnedProcesses?: OwnedProcessQuery;
+  renameDirectory?: (source: string, destination: string) => Promise<void>;
+  report?: (record: Readonly<Record<string, unknown>>) => void;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  now?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
+}>;
+
+export async function relocatePortableApplication(
+  sourceRoot: string,
+  destinationRoot: string,
+  launcherPath: string,
+  dependencies: PortableRelocationDependencies = {},
+): Promise<void> {
+  const queryOwnedProcesses = dependencies.queryOwnedProcesses ?? (
+    (timeoutMs) => readOwnedProcessSnapshot(sourceRoot, launcherPath, timeoutMs)
+  );
+  const report = dependencies.report ?? ((record: Readonly<Record<string, unknown>>) => {
+    process.stdout.write(`PDF_SCRUBBER_SMOKE ${JSON.stringify(record)}\n`);
+  });
+
+  let shutdown: Awaited<ReturnType<typeof waitForOwnedProcessShutdown>>;
+  try {
+    shutdown = await waitForOwnedProcessShutdown(queryOwnedProcesses, {
+      ...(dependencies.timeoutMs === undefined ? {} : { timeoutMs: dependencies.timeoutMs }),
+      ...(dependencies.pollIntervalMs === undefined ? {} : { pollIntervalMs: dependencies.pollIntervalMs }),
+      ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+      ...(dependencies.sleep === undefined ? {} : { sleep: dependencies.sleep }),
+    });
+  } catch (error) {
+    const snapshots = error instanceof OwnedProcessShutdownError || error instanceof OwnedProcessQueryError
+      ? { initialSnapshot: error.initialSnapshot, lastSnapshot: error.lastSnapshot }
+      : {};
+    reportWithoutMasking(report, {
+      event: 'portable-owned-process-shutdown-failed',
+      applicationRoot: sourceRoot,
+      ...snapshots,
+      error: describeError(error),
+    });
+    throw error;
+  }
+
+  report({
+    event: 'portable-owned-process-shutdown',
+    applicationRoot: sourceRoot,
+    initialSnapshot: shutdown.initialSnapshot,
+    finalSnapshot: shutdown.finalSnapshot,
+  });
+
+  try {
+    await (dependencies.renameDirectory ?? rename)(sourceRoot, destinationRoot);
+  } catch (renameError) {
+    let processSnapshot: OwnedProcessSnapshot | undefined;
+    let processSnapshotError: Readonly<Record<string, unknown>> | undefined;
+    try {
+      processSnapshot = await queryOwnedProcesses(5_000);
+    } catch (error) {
+      processSnapshotError = describeError(error);
+    }
+
+    const rootAttributes = await readObservedRootAttributes(sourceRoot);
+
+    const diagnostic = {
+      event: 'portable-relocation-failed',
+      sourceRoot,
+      destinationRoot,
+      renameError: describeError(renameError),
+      processSnapshot: processSnapshot ?? null,
+      ...(processSnapshotError === undefined ? {} : { processSnapshotError }),
+      rootAttributes,
+    };
+    reportWithoutMasking(report, diagnostic);
+
+    const wrapped = Object.assign(
+      new Error(`Portable application relocation failed: ${JSON.stringify(diagnostic)}`, { cause: renameError }),
+      pickErrorFields(renameError),
+      {
+        name: 'PortableRelocationError',
+        processSnapshot,
+        processSnapshotError,
+        rootAttributes,
+      },
+    );
+    throw wrapped;
+  }
+}
 
 export function chooseFittingNonDefaultWindowSize(
   workArea: Readonly<{ width: number; height: number }>,
@@ -135,7 +230,7 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
 
     await writeFile(settingsPath, customSettings);
     const movedRoot = join(input.temporaryRoot, 'Moved portable application with spaces and café');
-    await rename(applicationRoot, movedRoot);
+    await relocatePortableApplication(applicationRoot, movedRoot, launcherExecutable);
     applicationRoot = movedRoot;
     runtimeDirectory = join(applicationRoot, 'config', 'runtime');
     launcherExecutable = join(applicationRoot, 'PDF-Scrubber.exe');
@@ -218,6 +313,50 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
     })}\n`);
   } finally {
     await closeSession();
+  }
+}
+
+function reportWithoutMasking(
+  report: (record: Readonly<Record<string, unknown>>) => void,
+  record: Readonly<Record<string, unknown>>,
+): void {
+  try {
+    report(record);
+  } catch {
+    // A diagnostic write must not replace the original shutdown or rename failure.
+  }
+}
+
+function describeError(error: unknown): Readonly<Record<string, unknown>> {
+  const details: Record<string, unknown> = {
+    name: error instanceof Error ? error.name : 'UnknownError',
+    message: error instanceof Error ? error.message : String(error),
+  };
+  Object.assign(details, pickErrorFields(error));
+  return details;
+}
+
+function pickErrorFields(error: unknown): Readonly<Record<string, unknown>> {
+  if (error === null || typeof error !== 'object') return {};
+  const details: Record<string, unknown> = {};
+  const properties = error as Record<string, unknown>;
+  for (const name of ['code', 'syscall', 'path', 'dest'] as const) {
+    if (name in properties) details[name] = properties[name];
+  }
+  return details;
+}
+
+async function readObservedRootAttributes(sourceRoot: string): Promise<Readonly<Record<string, unknown>>> {
+  try {
+    const details = await lstat(sourceRoot);
+    return {
+      exists: true,
+      isDirectory: details.isDirectory(),
+      isSymbolicLink: details.isSymbolicLink(),
+      mode: details.mode,
+    };
+  } catch (error) {
+    return { exists: false, error: describeError(error) };
   }
 }
 

@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:net';
 import { mkdir, readFile, readdir, stat } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
@@ -13,6 +14,9 @@ import { chromium, expect, type Browser, type BrowserContext, type Page } from '
 const DEBUG_START_TIMEOUT_MS = 45_000;
 const APP_SHUTDOWN_TIMEOUT_MS = 15_000;
 const WINDOWS_HELPER_TIMEOUT_MS = 90_000;
+const MAX_CHILD_PROCESS_TIMEOUT_MS = 2_147_483_647;
+const OWNED_PROCESS_QUERY_RECORD_LIMIT = 32;
+const OWNED_PROCESS_POLL_INTERVAL_MS = 150;
 const execFileAsync = promisify(execFile);
 
 export type AppSession = {
@@ -41,6 +45,168 @@ export type PortableWindowDiagnostic = Readonly<{
 }>;
 
 type CdpConnector = Pick<typeof chromium, 'connectOverCDP'>;
+
+export type OwnedProcessRecord = Readonly<{
+  processId: number;
+  parentProcessId: number;
+  executablePath: string;
+  creationTime: string | null;
+}>;
+
+export type OwnedProcessSnapshot = Readonly<{
+  totalCount: number;
+  truncated: boolean;
+  records: readonly OwnedProcessRecord[];
+}>;
+
+export type OwnedProcessQuery = (timeoutMs: number) => Promise<OwnedProcessSnapshot>;
+
+export type OwnedProcessWaitOptions = Readonly<{
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  now?: () => number;
+  sleep?: (milliseconds: number) => Promise<void>;
+}>;
+
+export class OwnedProcessShutdownError extends Error {
+  constructor(
+    readonly initialSnapshot: OwnedProcessSnapshot | undefined,
+    readonly lastSnapshot: OwnedProcessSnapshot | undefined,
+    timeoutMs: number,
+  ) {
+    super(
+      `Owned portable processes remained under the application root after ${timeoutMs}ms; `
+      + `initial=${JSON.stringify(initialSnapshot ?? null)}; last=${JSON.stringify(lastSnapshot ?? null)}`,
+    );
+    this.name = 'OwnedProcessShutdownError';
+  }
+}
+
+export class OwnedProcessQueryError extends Error {
+  constructor(
+    readonly initialSnapshot: OwnedProcessSnapshot | undefined,
+    readonly lastSnapshot: OwnedProcessSnapshot | undefined,
+    cause: unknown,
+  ) {
+    super(
+      `Could not verify that owned portable processes have exited; refusing relocation. `
+      + `initial=${JSON.stringify(initialSnapshot ?? null)}; last=${JSON.stringify(lastSnapshot ?? null)}`,
+      { cause },
+    );
+    this.name = 'OwnedProcessQueryError';
+  }
+}
+
+export function parseOwnedProcessSnapshot(stdout: string): OwnedProcessSnapshot {
+  let value: unknown;
+  try {
+    value = JSON.parse(stdout);
+  } catch (error) {
+    throw new Error('Native Windows process snapshot was not valid JSON.', { cause: error });
+  }
+  if (!isRecord(value)
+    || !hasExactKeys(value, ['operation', 'totalCount', 'truncated', 'records'])
+    || value.operation !== 'SnapshotOwnedProcesses'
+    || !Number.isSafeInteger(value.totalCount)
+    || (value.totalCount as number) < 0
+    || typeof value.truncated !== 'boolean'
+    || !Array.isArray(value.records)
+    || value.records.length > OWNED_PROCESS_QUERY_RECORD_LIMIT) {
+    throw new Error('Native Windows process snapshot did not match its bounded schema.');
+  }
+
+  const totalCount = value.totalCount as number;
+  const records: OwnedProcessRecord[] = value.records.map((record: unknown) => {
+    if (!isRecord(record)
+      || !hasExactKeys(record, ['processId', 'parentProcessId', 'executablePath', 'creationTime'])
+      || !Number.isSafeInteger(record.processId)
+      || (record.processId as number) < 1
+      || !Number.isSafeInteger(record.parentProcessId)
+      || (record.parentProcessId as number) < 0
+      || typeof record.executablePath !== 'string'
+      || record.executablePath.length === 0
+      || !(record.creationTime === null || typeof record.creationTime === 'string')) {
+      throw new Error('Native Windows process snapshot contained an invalid process record.');
+    }
+    return {
+      processId: record.processId as number,
+      parentProcessId: record.parentProcessId as number,
+      executablePath: record.executablePath,
+      creationTime: record.creationTime,
+    };
+  });
+
+  const shouldBeTruncated = totalCount > OWNED_PROCESS_QUERY_RECORD_LIMIT;
+  const expectedRecords = Math.min(totalCount, OWNED_PROCESS_QUERY_RECORD_LIMIT);
+  if (value.truncated !== shouldBeTruncated || records.length !== expectedRecords) {
+    throw new Error('Native Windows process snapshot count did not match its records.');
+  }
+
+  return { totalCount, truncated: value.truncated, records };
+}
+
+export async function readOwnedProcessSnapshot(
+  applicationRoot: string,
+  launcherPath: string,
+  timeoutMs = WINDOWS_HELPER_TIMEOUT_MS,
+): Promise<OwnedProcessSnapshot> {
+  const result = await runWindowsSmokeHelper([
+    '-Operation', 'SnapshotOwnedProcesses',
+    '-ApplicationRoot', applicationRoot,
+    '-LauncherPath', launcherPath,
+  ], timeoutMs);
+  return parseOwnedProcessSnapshot(result.stdout.trim());
+}
+
+export async function waitForOwnedProcessShutdown(
+  query: OwnedProcessQuery,
+  options: OwnedProcessWaitOptions = {},
+): Promise<Readonly<{
+  initialSnapshot: OwnedProcessSnapshot;
+  finalSnapshot: OwnedProcessSnapshot;
+}>> {
+  const timeoutMs = options.timeoutMs ?? APP_SHUTDOWN_TIMEOUT_MS;
+  const pollIntervalMs = options.pollIntervalMs ?? OWNED_PROCESS_POLL_INTERVAL_MS;
+  const now = options.now ?? (() => performance.now());
+  const sleep = options.sleep ?? delay;
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError('Owned-process shutdown timeout must be a positive finite number.');
+  }
+  if (!Number.isFinite(pollIntervalMs) || pollIntervalMs <= 0) {
+    throw new RangeError('Owned-process poll interval must be a positive finite number.');
+  }
+
+  const deadline = now() + timeoutMs;
+  let initialSnapshot: OwnedProcessSnapshot | undefined;
+  let lastSnapshot: OwnedProcessSnapshot | undefined;
+  while (true) {
+    const remainingMs = deadline - now();
+    if (remainingMs <= 0) {
+      throw new OwnedProcessShutdownError(initialSnapshot, lastSnapshot, timeoutMs);
+    }
+
+    let snapshot: OwnedProcessSnapshot;
+    try {
+      snapshot = await query(remainingMs);
+    } catch (error) {
+      throw new OwnedProcessQueryError(initialSnapshot, lastSnapshot, error);
+    }
+    initialSnapshot ??= snapshot;
+    lastSnapshot = snapshot;
+
+    const remainingAfterQueryMs = deadline - now();
+    if (remainingAfterQueryMs < 0) {
+      throw new OwnedProcessShutdownError(initialSnapshot, lastSnapshot, timeoutMs);
+    }
+    if (snapshot.totalCount === 0 && !snapshot.truncated && snapshot.records.length === 0) {
+      return { initialSnapshot, finalSnapshot: snapshot };
+    }
+    if (remainingAfterQueryMs <= 0) {
+      throw new OwnedProcessShutdownError(initialSnapshot, lastSnapshot, timeoutMs);
+    }
+    await sleep(Math.min(pollIntervalMs, remainingAfterQueryMs));
+  }
+}
 
 export async function openPortableSession(
   executable: string,
@@ -309,23 +475,21 @@ export async function waitForChildExit(child: ChildProcess, timeoutMs: number): 
 }
 
 export async function invokeWindowsSmokeHelper(arguments_: readonly string[]): Promise<void> {
-  const helperPath = join(import.meta.dirname, 'desktop-portable-smoke.windows.ps1');
-  const result = await execFileAsync('powershell.exe', [
-    '-NoProfile',
-    '-NonInteractive',
-    '-ExecutionPolicy',
-    'Bypass',
-    '-File',
-    helperPath,
-    ...arguments_,
-  ], {
-    timeout: WINDOWS_HELPER_TIMEOUT_MS,
-    maxBuffer: 2 * 1024 * 1024,
-    windowsHide: true,
-  });
+  const result = await runWindowsSmokeHelper(arguments_, WINDOWS_HELPER_TIMEOUT_MS);
   if (!result.stdout.includes('passed')) {
     throw new Error('Native Windows lifecycle helper did not report its operation as passed.');
   }
+}
+
+export function createWindowsSmokeHelperExecOptions(timeoutMs: number) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError('Windows smoke helper timeout must be finite positive milliseconds.');
+  }
+  return {
+    timeout: Math.min(MAX_CHILD_PROCESS_TIMEOUT_MS, Math.max(1, Math.floor(timeoutMs))),
+    maxBuffer: 2 * 1024 * 1024,
+    windowsHide: true,
+  };
 }
 
 export async function connectElectronBrowser(
@@ -539,4 +703,29 @@ function closeNetServer(server: ReturnType<typeof createServer>): Promise<void> 
   return new Promise((resolvePromise, reject) => {
     server.close((error) => (error ? reject(error) : resolvePromise()));
   });
+}
+
+async function runWindowsSmokeHelper(
+  arguments_: readonly string[],
+  timeoutMs: number,
+): Promise<{ stdout: string; stderr: string }> {
+  const helperPath = join(import.meta.dirname, 'desktop-portable-smoke.windows.ps1');
+  return execFileAsync('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-ExecutionPolicy',
+    'Bypass',
+    '-File',
+    helperPath,
+    ...arguments_,
+  ], createWindowsSmokeHelperExecOptions(timeoutMs));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasExactKeys(record: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
+  const actual = Object.keys(record);
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(record, key));
 }
