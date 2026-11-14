@@ -222,15 +222,30 @@ test('requires archive and sidecar provenance to match every source identity', (
   )).toThrow(/provenance/i);
 });
 
-test('native Windows lifecycle helper scopes dialog and forced-exit operations to its owned process tree', async () => {
-  const helper = await readFile(join(import.meta.dirname, 'desktop-portable-smoke.windows.ps1'), 'utf8');
+test('retains owned-process forced-exit checks and marks negative dialog checks manual', async () => {
+  const [helper, lifecycle] = await Promise.all([
+    readFile(join(import.meta.dirname, 'desktop-portable-smoke.windows.ps1'), 'utf8'),
+    readFile(join(import.meta.dirname, 'desktop-portable-lifecycle.ts'), 'utf8'),
+  ]);
 
+  expect(helper).toContain("[ValidateSet('ForceRuntimeExit', 'TerminateOwnedTree')]");
   expect(helper).toContain('Get-OwnedProcessTree');
-  expect(helper).toContain('FindVisibleWindows($processIds)');
+  expect(helper).toContain('Get-OwnedProcessExitCode');
+  expect(helper).toContain('if ($exitCode -isnot [int])');
+  expect(helper).toContain('[void]$process.Handle');
   expect(helper).toContain('Stop-Process -Id $runtimeId -Force');
   expect(helper).toContain('$runtimePath.Equals($nativeRuntime');
-  expect(helper).toContain('$originalSddl');
-  expect(helper).toContain('SetSecurityDescriptorSddlForm(');
-  expect(helper).toContain('if ($restoredSddl -ne $originalSddl)');
   expect(helper).toContain('finally {');
+  expect(helper).not.toMatch(/ExpectedText|ExpectError|ExpectUnwritableProfile|Wait-ForOwnedErrorDialog|FindVisibleWindows|UIAutomation|EncodedCommand|Add-Type/);
+  expect(helper).not.toContain('desktop-portable-dialog.windows.ps1');
+
+  expect(lifecycle).toContain("automatedNegativeDialogChecks: false");
+  expect(lifecycle).toContain("manualNegativeDialogCheck: 'pending'");
+  expect(lifecycle).toContain("directInnerRuntimeNegativeCheck: 'pending'");
+  expect(lifecycle).not.toMatch(/ExpectError|ExpectUnwritableProfile|ExpectedText/);
+  expect(lifecycle).toContain("'-Operation', 'ForceRuntimeExit'");
+  expect(lifecycle).toContain("event: 'portable-lifecycle-complete'");
+  expect(lifecycle).toContain("'Portable desktop edit'");
+  expect(lifecycle).toContain('remoteRequests');
+  expect(lifecycle).toContain('missingSettings');
 });

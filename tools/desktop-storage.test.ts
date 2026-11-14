@@ -39,11 +39,24 @@ type PortableStorage = Readonly<{
   configurePortableApp(app: unknown, paths: PortablePaths): void;
 }>;
 
+type ConfigurationErrorInstance = Error & Readonly<{ problem: string; line?: number; column?: number }>;
+type ConfigurationErrors = Readonly<{
+  ConfigurationError: new (
+    problem: string,
+    options?: Readonly<{ line?: number; column?: number; cause?: unknown }>,
+  ) => ConfigurationErrorInstance;
+  formatConfigurationError(error: unknown): Readonly<{ title: string; message: string }>;
+}>;
+
 const require = createRequire(import.meta.url);
 const temporaryDirectories: string[] = [];
 
 function storage(): PortableStorage {
   return require('../apps/desktop/runtime/portable-storage.cjs') as PortableStorage;
+}
+
+function configurationErrors(): ConfigurationErrors {
+  return require('../apps/desktop/runtime/configuration-error.cjs') as ConfigurationErrors;
 }
 
 afterEach(() => {
@@ -108,8 +121,68 @@ test('preserves valid custom dimensions and rejects malformed settings without c
 
   const malformedBytes = Buffer.from('{"schemaVersion":1,"window":');
   writeFileSync(settingsPath, malformedBytes);
-  expect(() => storage().preparePortableStorage(root)).toThrow();
+  let failure: unknown;
+  try {
+    storage().preparePortableStorage(root);
+  } catch (error) {
+    failure = error;
+  }
+  expect(failure).toBeInstanceOf(configurationErrors().ConfigurationError);
+  expect(configurationErrors().formatConfigurationError(failure).message).not.toContain('Location:');
   expect(readFileSync(settingsPath)).toEqual(malformedBytes);
+});
+
+test('uses a parser-reported position for malformed settings when the engine provides one', () => {
+  const root = createPortableRoot();
+  const settingsPath = join(root, 'settings.json');
+  const raw = '{\n  "schemaVersion": 1,\n  "window": }\n';
+  const bytes = Buffer.from(raw);
+  const position = raw.indexOf('}');
+  const prefix = raw.slice(0, position);
+  const expectedLine = prefix.split('\n').length;
+  const expectedColumn = position - prefix.lastIndexOf('\n');
+  writeFileSync(settingsPath, bytes);
+  vi.spyOn(JSON, 'parse').mockImplementationOnce(() => {
+    const error = new SyntaxError('parser failure');
+    Object.defineProperty(error, 'position', { value: position });
+    throw error;
+  });
+
+  let failure: unknown;
+  try {
+    storage().preparePortableStorage(root);
+  } catch (error) {
+    failure = error;
+  }
+
+  expect(failure).toBeInstanceOf(configurationErrors().ConfigurationError);
+  expect(configurationErrors().formatConfigurationError(failure).message)
+    .toContain(`Location: line ${expectedLine}, column ${expectedColumn}`);
+  expect(readFileSync(settingsPath)).toEqual(bytes);
+});
+
+test('reports schema and dimension errors by field and preserves invalid settings bytes', () => {
+  const root = createPortableRoot();
+  const settingsPath = join(root, 'settings.json');
+  const cases: ReadonlyArray<readonly [unknown, string]> = [
+    [{ schemaVersion: 2, window: { width: 1280, height: 860 } }, 'schemaVersion must be the integer 1.'],
+    [{ schemaVersion: 1, window: { width: 'secret', height: 860 } }, 'window.width must be an integer from 760 to 16384.'],
+    [{ schemaVersion: 1, window: { width: 1280, height: 16_385 } }, 'window.height must be an integer from 560 to 16384.'],
+  ];
+
+  for (const [settings, expectedProblem] of cases) {
+    const bytes = Buffer.from(`${JSON.stringify(settings)}\n`);
+    writeFileSync(settingsPath, bytes);
+    let failure: unknown;
+    try {
+      storage().preparePortableStorage(root);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(configurationErrors().ConfigurationError);
+    expect((failure as ConfigurationErrorInstance).problem).toBe(expectedProblem);
+    expect(readFileSync(settingsPath)).toEqual(bytes);
+  }
 });
 
 test('rejects linked root, config, profile and settings paths', () => {

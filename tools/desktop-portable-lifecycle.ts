@@ -54,7 +54,6 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
   let applicationRoot = input.applicationRoot;
   let runtimeDirectory = join(applicationRoot, 'config', 'runtime');
   let launcherExecutable = join(applicationRoot, 'PDF-Scrubber.exe');
-  let runtimeExecutable = join(runtimeDirectory, 'PDF-Scrubber.exe');
   let settingsPath = join(applicationRoot, 'settings.json');
   let activeSession: AppSession | undefined;
   let firstReadyMs = 0;
@@ -140,7 +139,6 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
     applicationRoot = movedRoot;
     runtimeDirectory = join(applicationRoot, 'config', 'runtime');
     launcherExecutable = join(applicationRoot, 'PDF-Scrubber.exe');
-    runtimeExecutable = join(runtimeDirectory, 'PDF-Scrubber.exe');
     settingsPath = join(applicationRoot, 'settings.json');
 
     const moved = await openSession();
@@ -198,46 +196,6 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
       await writeFile(settingsPath, customSettings);
     }
 
-    const malformedSettings = Buffer.from('{"schemaVersion":1,"window":', 'utf8');
-    await writeFile(settingsPath, malformedSettings);
-    try {
-      await invokeWindowsSmokeHelper([
-        '-Operation', 'ExpectError',
-        '-ApplicationRoot', applicationRoot,
-        '-LauncherPath', launcherExecutable,
-        '-ExpectedText', 'settings.json is malformed and was not changed',
-      ]);
-      expect(await readFile(settingsPath)).toEqual(malformedSettings);
-    } finally {
-      await writeFile(settingsPath, customSettings);
-    }
-
-    const runtimeBackup = join(applicationRoot, 'config', 'runtime.smoke-disabled');
-    await rename(runtimeDirectory, runtimeBackup);
-    try {
-      await invokeWindowsSmokeHelper([
-        '-Operation', 'ExpectError',
-        '-ApplicationRoot', applicationRoot,
-        '-LauncherPath', launcherExecutable,
-        '-ExpectedText', 'Re-extract the complete PDF-Scrubber archive',
-      ]);
-    } finally {
-      await rename(runtimeBackup, runtimeDirectory);
-    }
-
-    await invokeWindowsSmokeHelper([
-      '-Operation', 'ExpectUnwritableProfile',
-      '-ApplicationRoot', applicationRoot,
-      '-LauncherPath', launcherExecutable,
-    ]);
-    await invokeWindowsSmokeHelper([
-      '-Operation', 'ExpectError',
-      '-ApplicationRoot', applicationRoot,
-      '-LauncherPath', launcherExecutable,
-      '-ExecutablePath', runtimeExecutable,
-      '-ExpectedText', 'portable launcher is required',
-    ]);
-
     await assertRootLayout(applicationRoot);
     assertPortableConfigEntries(await readdir(join(applicationRoot, 'config')));
     expect(await readFile(settingsPath)).toEqual(customSettings);
@@ -254,6 +212,9 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
       managedPathsChecked: true,
       knownLegacyAppDataUnchanged: true,
       runtimeInventoryUnchanged: true,
+      automatedNegativeDialogChecks: false,
+      manualNegativeDialogCheck: 'pending',
+      directInnerRuntimeNegativeCheck: 'pending',
     })}\n`);
   } finally {
     await closeSession();

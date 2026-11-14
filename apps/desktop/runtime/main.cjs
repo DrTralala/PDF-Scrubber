@@ -7,6 +7,7 @@ const {
   preflightPortableStorage,
   preparePortableStorage,
 } = require('./portable-storage.cjs');
+const { showConfigurationError } = require('./configuration-error.cjs');
 const { createSmokeDiagnosticSink } = require('./smoke-diagnostics.cjs');
 
 let mainWindow;
@@ -41,13 +42,15 @@ try {
   }
 } catch (error) {
   portablePaths = undefined;
-  const detail = error instanceof Error ? error.message : String(error);
-  console.error('PDF-Scrubber portable storage bootstrap failed', error);
-  dialog.showErrorBox(
-    'PDF-Scrubber could not start',
-    `${detail}\n\nMove the complete application folder to a writable location and start its root PDF-Scrubber.exe.`,
-  );
-  app.exit(1);
+  if (!showConfigurationError(error, { dialog, app })) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error('PDF-Scrubber portable storage bootstrap failed', error);
+    dialog.showErrorBox(
+      'PDF-Scrubber could not start',
+      `${detail}\n\nMove the complete application folder to a writable location and start its root PDF-Scrubber.exe.`,
+    );
+    app.exit(1);
+  }
 }
 
 app.on('web-contents-created', (_event, contents) => {

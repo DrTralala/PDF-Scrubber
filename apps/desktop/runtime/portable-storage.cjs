@@ -1,6 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { ConfigurationError } = require('./configuration-error.cjs');
 
 const DEFAULT_SETTINGS = Object.freeze({
   schemaVersion: 1,
@@ -8,14 +9,17 @@ const DEFAULT_SETTINGS = Object.freeze({
 });
 
 function validateSettings(value) {
-  if (!isPlainRecord(value) || !hasExactKeys(value, ['schemaVersion', 'window'])) {
-    throw new Error('settings.json must contain only schemaVersion and window');
+  if (!isPlainRecord(value)) {
+    throw new ConfigurationError('settings.json must be an object with only schemaVersion and window.');
+  }
+  if (!hasExactKeys(value, ['schemaVersion', 'window'])) {
+    throw new ConfigurationError('settings.json must contain only schemaVersion and window.');
   }
   if (value.schemaVersion !== 1) {
-    throw new Error(`Unsupported settings schema version: ${String(value.schemaVersion)}`);
+    throw new ConfigurationError('schemaVersion must be the integer 1.');
   }
   if (!isPlainRecord(value.window) || !hasExactKeys(value.window, ['width', 'height'])) {
-    throw new Error('settings.json window must contain only width and height');
+    throw new ConfigurationError('window must be an object with only width and height.');
   }
   validateDimension(value.window.width, 'width', 760);
   validateDimension(value.window.height, 'height', 560);
@@ -82,7 +86,7 @@ function configurePortableApp(app, paths) {
 
 function validateDimension(value, name, minimum) {
   if (!Number.isInteger(value) || value < minimum || value > 16_384) {
-    throw new Error(`settings.json window ${name} must be an integer from ${minimum} to 16384`);
+    throw new ConfigurationError(`window.${name} must be an integer from ${minimum} to 16384.`);
   }
 }
 
@@ -189,13 +193,32 @@ function tryReadSettings(settingsPath) {
   try {
     parsed = JSON.parse(rawSettings);
   } catch (error) {
-    throw new Error(`settings.json is malformed and was not changed: ${settingsPath}`, { cause: error });
+    throw new ConfigurationError('Invalid JSON.', {
+      ...readJsonParseLocation(error, rawSettings),
+      cause: error,
+    });
   }
-  try {
-    return { found: true, settings: validateSettings(parsed) };
-  } catch (error) {
-    throw new Error(`settings.json is invalid and was not changed: ${settingsPath}`, { cause: error });
+  return { found: true, settings: validateSettings(parsed) };
+}
+
+function readJsonParseLocation(error, source) {
+  if (!(error instanceof SyntaxError)) return {};
+
+  const position = error.position;
+  if (Number.isInteger(position) && position >= 0 && position <= source.length) {
+    const precedingText = source.slice(0, position);
+    const lines = precedingText.split(/\r\n|[\r\n]/);
+    return { line: lines.length, column: lines[lines.length - 1].length + 1 };
   }
+
+  const line = error.lineNumber ?? error.line;
+  const column = error.columnNumber ?? error.column;
+  if (Number.isInteger(line) && line >= 1 && Number.isInteger(column) && column >= 1) {
+    const sourceLines = source.split(/\r\n|[\r\n]/);
+    const lineText = sourceLines[line - 1];
+    if (lineText !== undefined && column <= lineText.length + 1) return { line, column };
+  }
+  return {};
 }
 
 function probeWritableDirectory(directory, label) {
@@ -260,6 +283,7 @@ function writeInitialSettings(settingsPath, tempDirectory) {
     candidateOwned = false;
     return DEFAULT_SETTINGS;
   } catch (error) {
+    if (error instanceof ConfigurationError) throw error;
     throw storageFailure(`Could not initialise settings.json at ${settingsPath}; no existing settings were changed`, error);
   } finally {
     if (descriptor !== undefined) {

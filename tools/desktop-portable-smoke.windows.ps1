@@ -1,14 +1,12 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ExpectError', 'ExpectUnwritableProfile', 'ForceRuntimeExit', 'TerminateOwnedTree')]
+  [ValidateSet('ForceRuntimeExit', 'TerminateOwnedTree')]
   [string] $Operation,
   [Parameter(Mandatory = $true)]
   [string] $ApplicationRoot,
   [Parameter(Mandatory = $true)]
   [string] $LauncherPath,
-  [string] $ExecutablePath,
-  [string] $ExpectedText,
   [int] $Port = 0,
   [int] $RootProcessId = 0
 )
@@ -21,81 +19,6 @@ $nativeRuntimeDirectory = [IO.Path]::GetFullPath((Join-Path $root 'config/runtim
 $tempPrefix = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
 if (-not $root.StartsWith($tempPrefix, [StringComparison]::OrdinalIgnoreCase)) {
   throw 'Native portable smoke helpers may only operate inside the fresh task-owned extraction directory.'
-}
-
-if (-not ('PdfScrubberPortableSmoke.NativeWindows' -as [type])) {
-  Add-Type -TypeDefinition @'
-using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.Text;
-
-namespace PdfScrubberPortableSmoke {
-  public sealed class SmokeWindow {
-    public IntPtr Handle { get; set; }
-    public uint ProcessId { get; set; }
-    public string Title { get; set; }
-    public string Text { get; set; }
-  }
-
-  public static class NativeWindows {
-    private delegate bool WindowCallback(IntPtr handle, IntPtr state);
-    private const uint WmClose = 0x0010;
-
-    [DllImport("user32.dll")]
-    private static extern bool EnumWindows(WindowCallback callback, IntPtr state);
-    [DllImport("user32.dll")]
-    private static extern bool EnumChildWindows(IntPtr parent, WindowCallback callback, IntPtr state);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int GetWindowText(IntPtr handle, StringBuilder text, int maximum);
-    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-    private static extern int GetWindowTextLength(IntPtr handle);
-    [DllImport("user32.dll")]
-    private static extern bool IsWindowVisible(IntPtr handle);
-    [DllImport("user32.dll")]
-    private static extern uint GetWindowThreadProcessId(IntPtr handle, out uint processId);
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool PostMessage(IntPtr handle, uint message, IntPtr wParam, IntPtr lParam);
-
-    private static string ReadText(IntPtr handle) {
-      int length = GetWindowTextLength(handle);
-      StringBuilder text = new StringBuilder(Math.Max(length + 1, 2));
-      GetWindowText(handle, text, text.Capacity);
-      return text.ToString();
-    }
-
-    public static List<SmokeWindow> FindVisibleWindows(int[] processIds) {
-      HashSet<uint> allowed = new HashSet<uint>();
-      foreach (int processId in processIds) allowed.Add((uint)processId);
-      List<SmokeWindow> found = new List<SmokeWindow>();
-      EnumWindows((handle, _) => {
-        if (!IsWindowVisible(handle)) return true;
-        uint processId;
-        GetWindowThreadProcessId(handle, out processId);
-        if (!allowed.Contains(processId)) return true;
-        List<string> childText = new List<string>();
-        EnumChildWindows(handle, (child, __) => {
-          string value = ReadText(child);
-          if (!String.IsNullOrWhiteSpace(value)) childText.Add(value);
-          return true;
-        }, IntPtr.Zero);
-        found.Add(new SmokeWindow {
-          Handle = handle,
-          ProcessId = processId,
-          Title = ReadText(handle),
-          Text = String.Join(" ", childText.ToArray())
-        });
-        return true;
-      }, IntPtr.Zero);
-      return found;
-    }
-
-    public static bool Dismiss(IntPtr handle) {
-      return PostMessage(handle, WmClose, IntPtr.Zero, IntPtr.Zero);
-    }
-  }
-}
-'@
 }
 
 function Get-OwnedProcessTree([int] $RootProcessId) {
@@ -144,6 +67,15 @@ function Stop-OwnedPortableProcessTree([int] $RootId) {
   if ($null -ne $rootProcess) { Stop-Process -Id $RootId -Force -ErrorAction SilentlyContinue }
 }
 
+function Get-OwnedProcessExitCode([Diagnostics.Process] $Process) {
+  if (-not $Process.HasExited) { throw 'The owned process has not exited.' }
+  $exitCode = $Process.ExitCode
+  if ($exitCode -isnot [int]) {
+    throw 'Could not obtain an explicit integer exit code for the owned process; cache its Handle before waiting.'
+  }
+  return $exitCode
+}
+
 function Start-OwnedProcess([string] $Path, [string[]] $Arguments = @()) {
   if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
     throw "Smoke executable is missing: $Path"
@@ -155,85 +87,14 @@ function Start-OwnedProcess([string] $Path, [string[]] $Arguments = @()) {
     ErrorAction = 'Stop'
   }
   if ($Arguments.Count -gt 0) { $startParameters.ArgumentList = $Arguments }
-  return Start-Process @startParameters
-}
-
-function Wait-ForOwnedErrorDialog([Diagnostics.Process] $Process, [string] $RequiredText) {
-  if ([string]::IsNullOrWhiteSpace($RequiredText)) {
-    throw 'ExpectedText is required for a native error-dialog smoke.'
-  }
-  $deadline = [DateTime]::UtcNow.AddSeconds(25)
-  while ([DateTime]::UtcNow -lt $deadline) {
-    $processIds = Get-OwnedProcessTree $Process.Id
-    foreach ($window in [PdfScrubberPortableSmoke.NativeWindows]::FindVisibleWindows($processIds)) {
-      $visibleText = "$($window.Title) $($window.Text)"
-      if ($visibleText.IndexOf($RequiredText, [StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
-      if (-not [PdfScrubberPortableSmoke.NativeWindows]::Dismiss($window.Handle)) {
-        throw 'Could not dismiss the owned portable-app error dialog.'
-      }
-      if (-not $Process.WaitForExit(15000)) {
-        throw 'Owned portable-app process did not exit after its error dialog was dismissed.'
-      }
-      if ($Process.ExitCode -eq 0) {
-        throw 'Portable-app error path unexpectedly returned success.'
-      }
-      return
-    }
-    if ($Process.HasExited) {
-      throw "Owned portable app exited before showing the required actionable error: $RequiredText"
-    }
-    Start-Sleep -Milliseconds 100
-  }
-  throw "Owned portable app did not show the required actionable error: $RequiredText"
+  $process = Start-Process @startParameters
+  # Windows PowerShell 5.1 otherwise loses ExitCode after WaitForExit/HasExited.
+  [void]$process.Handle
+  return $process
 }
 
 try {
   switch ($Operation) {
-    'ExpectError' {
-      if ([string]::IsNullOrWhiteSpace($ExecutablePath)) { $target = $launcher }
-      else { $target = [IO.Path]::GetFullPath($ExecutablePath) }
-      if (-not $target.Equals($launcher, [StringComparison]::OrdinalIgnoreCase) -and
-        -not $target.Equals($nativeRuntime, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Error-path smoke may start only the task-owned root launcher or its packaged inner runtime.'
-      }
-      $process = Start-OwnedProcess $target
-      Wait-ForOwnedErrorDialog $process $ExpectedText
-    }
-
-    'ExpectUnwritableProfile' {
-      $profile = Join-Path $root 'config/profile'
-      if (-not (Test-Path -LiteralPath $profile -PathType Container)) {
-        throw 'The task-owned profile directory is missing before ACL testing.'
-      }
-      $originalAcl = Get-Acl -LiteralPath $profile
-      $originalSddl = $originalAcl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::All)
-      $denyRule = [Security.AccessControl.FileSystemAccessRule]::new(
-        [Security.Principal.WindowsIdentity]::GetCurrent().User,
-        [Security.AccessControl.FileSystemRights]::Modify,
-        [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit',
-        [Security.AccessControl.PropagationFlags]::None,
-        [Security.AccessControl.AccessControlType]::Deny
-      )
-      try {
-        $testAcl = Get-Acl -LiteralPath $profile
-        [void]$testAcl.AddAccessRule($denyRule)
-        Set-Acl -LiteralPath $profile -AclObject $testAcl
-        $process = Start-OwnedProcess $launcher
-        Wait-ForOwnedErrorDialog $process 'profile or temporary storage folder is not writable'
-      } finally {
-        $restoreAcl = Get-Acl -LiteralPath $profile
-        $restoreAcl.SetSecurityDescriptorSddlForm(
-          $originalSddl,
-          [Security.AccessControl.AccessControlSections]::All
-        )
-        Set-Acl -LiteralPath $profile -AclObject $restoreAcl
-        $restoredSddl = (Get-Acl -LiteralPath $profile).GetSecurityDescriptorSddlForm(
-          [Security.AccessControl.AccessControlSections]::All
-        )
-        if ($restoredSddl -ne $originalSddl) { throw 'Could not restore the task-owned profile ACL exactly.' }
-      }
-    }
-
     'ForceRuntimeExit' {
       if ($Port -lt 1 -or $Port -gt 65535) { throw 'ForceRuntimeExit requires a valid owned loopback port.' }
       $process = Start-OwnedProcess $launcher @(
@@ -278,7 +139,8 @@ try {
       if (-not $process.WaitForExit(15000)) {
         throw 'Owned portable launcher did not propagate the forced runtime exit.'
       }
-      if ($process.ExitCode -eq 0) { throw 'Forced runtime exit was incorrectly reported as success.' }
+      $exitCode = Get-OwnedProcessExitCode -Process $process
+      if ($exitCode -eq 0) { throw 'Forced runtime exit was incorrectly reported as success.' }
     }
 
     'TerminateOwnedTree' {

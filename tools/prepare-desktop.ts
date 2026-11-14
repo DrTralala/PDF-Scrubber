@@ -162,6 +162,7 @@ export async function prepareDesktopApp(options: PrepareDesktopOptions): Promise
 
   const desktopPackagePath = resolve(repositoryRoot, 'apps/desktop/package.json');
   const runtimeMainPath = resolve(repositoryRoot, 'apps/desktop/runtime/main.cjs');
+  const configurationErrorPath = resolve(repositoryRoot, 'apps/desktop/runtime/configuration-error.cjs');
   const runtimeStoragePath = resolve(repositoryRoot, 'apps/desktop/runtime/portable-storage.cjs');
   const smokeDiagnosticsPath = resolve(repositoryRoot, 'apps/desktop/runtime/smoke-diagnostics.cjs');
   const securityPolicyPath = resolve(repositoryRoot, 'apps/desktop/security-policy.js');
@@ -169,6 +170,7 @@ export async function prepareDesktopApp(options: PrepareDesktopOptions): Promise
   const [desktopPackageText] = await Promise.all([
     readFile(desktopPackagePath, 'utf8'),
     requireRegularFile(runtimeMainPath),
+    requireRegularFile(configurationErrorPath),
     requireRegularFile(runtimeStoragePath),
     requireRegularFile(smokeDiagnosticsPath),
     requireRegularFile(securityPolicyPath),
@@ -194,6 +196,7 @@ export async function prepareDesktopApp(options: PrepareDesktopOptions): Promise
     });
     await Promise.all([
       copyFile(runtimeMainPath, resolve(outputDirectory, 'main.cjs')),
+      copyFile(configurationErrorPath, resolve(outputDirectory, 'configuration-error.cjs')),
       copyFile(runtimeStoragePath, resolve(outputDirectory, 'portable-storage.cjs')),
       copyFile(smokeDiagnosticsPath, resolve(outputDirectory, 'smoke-diagnostics.cjs')),
       copyFile(securityPolicyPath, resolve(outputDirectory, 'security-policy.js')),

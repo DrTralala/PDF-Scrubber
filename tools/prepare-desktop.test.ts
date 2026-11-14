@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -110,6 +110,7 @@ test('stages the selected editor build with the current wrapper and both source 
     writeFile(join(assets, 'index.html'), '<!doctype html><script src="/assets/app.js"></script>'),
     writeFile(join(assets, 'assets', 'app.js'), 'void 0;'),
     writeFile(join(repository, 'apps', 'desktop', 'runtime', 'main.cjs'), 'main'),
+    writeFile(join(repository, 'apps', 'desktop', 'runtime', 'configuration-error.cjs'), 'configuration error'),
     writeFile(join(repository, 'apps', 'desktop', 'runtime', 'portable-storage.cjs'), 'storage'),
     writeFile(join(repository, 'apps', 'desktop', 'runtime', 'smoke-diagnostics.cjs'), 'smoke diagnostics'),
     writeFile(join(repository, 'apps', 'desktop', 'security-policy.js'), 'policy'),
@@ -132,6 +133,7 @@ test('stages the selected editor build with the current wrapper and both source 
 
   expect(provenance.editor.sha).toBe('a'.repeat(40));
   expect(provenance.packaging.sha).toBe('b'.repeat(40));
+  expect(await readdir(output)).toContain('configuration-error.cjs');
   expect(JSON.parse(await readFile(join(output, 'package.json'), 'utf8'))).toMatchObject({
     version: '1.0.0',
     main: 'main.cjs',
@@ -139,6 +141,7 @@ test('stages the selected editor build with the current wrapper and both source 
   });
   await expect(readFile(join(output, 'web', 'assets', 'app.js'), 'utf8')).resolves.toBe('void 0;');
   await expect(readFile(join(output, 'main.cjs'), 'utf8')).resolves.toBe('main');
+  await expect(readFile(join(output, 'configuration-error.cjs'), 'utf8')).resolves.toBe('configuration error');
   await expect(readFile(join(output, 'portable-storage.cjs'), 'utf8')).resolves.toBe('storage');
   await expect(readFile(join(output, 'smoke-diagnostics.cjs'), 'utf8')).resolves.toBe('smoke diagnostics');
   await expect(readFile(join(output, 'server.mjs'), 'utf8')).resolves.toBe('server');
