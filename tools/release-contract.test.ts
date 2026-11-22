@@ -1,7 +1,9 @@
 import { execFile } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
-import { resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import { expect, test } from 'vitest';
 
@@ -345,6 +347,62 @@ test('Windows portable workflow smoke-tests the final archive before checksummin
   expect(runtimeMain).toContain('requestedHeight: settings.window.height');
   expect(publishWorkflow).toContain('npm publish --workspace pdf-scrubber');
 });
+
+test.skipIf(process.platform !== 'linux')(
+  'release attachment accepts only an exact LF or CRLF checksum sidecar',
+  async () => {
+    const workflow = await readFile(resolve(projectRoot, '.github/workflows/desktop.yml'), 'utf8');
+    const comparisonStart = workflow.indexOf('          checksum="${archive}.sha256"\n');
+    const comparisonEnd = workflow.indexOf('\n\n          existing_assets=', comparisonStart);
+
+    expect(comparisonStart).toBeGreaterThanOrEqual(0);
+    expect(comparisonEnd).toBeGreaterThan(comparisonStart);
+    const comparison = workflow
+      .slice(comparisonStart, comparisonEnd)
+      .split('\n')
+      .map((line) => line.replace(/^          /, ''))
+      .join('\n');
+    const temporaryRoot = await mkdtemp(join(tmpdir(), 'pdf-scrubber-release-checksum-'));
+
+    try {
+      const archive = join(temporaryRoot, 'PDF-Scrubber-1.0.0-win-x64-portable.7z');
+      const archiveBytes = Buffer.from('release checksum fixture');
+      const digest = createHash('sha256').update(archiveBytes).digest('hex');
+      const checksumLine = `${digest}  ${basename(archive)}`;
+      await writeFile(archive, archiveBytes);
+
+      const expectSidecar = async (contents: string, accepted: boolean): Promise<void> => {
+        await writeFile(`${archive}.sha256`, contents, 'ascii');
+        const script = [
+          'set -euo pipefail',
+          'archive="$ARCHIVE"',
+          'checksums=("$ARCHIVE.sha256")',
+          comparison,
+        ].join('\n');
+        let exitCode = 0;
+        try {
+          await execFileAsync('bash', ['-c', script], {
+            cwd: projectRoot,
+            env: { ...process.env, ARCHIVE: archive },
+          });
+        } catch (error) {
+          exitCode = (error as { code?: number }).code ?? -1;
+        }
+        expect(exitCode === 0, JSON.stringify(contents)).toBe(accepted);
+      };
+
+      await expectSidecar(`${checksumLine}\n`, true);
+      await expectSidecar(`${checksumLine}\r\n`, true);
+      await expectSidecar(`${digest}  another-archive.7z\n`, false);
+      await expectSidecar(`${digest} ${basename(archive)}\n`, false);
+      const wrongDigest = `${digest[0] === '0' ? '1' : '0'}${digest.slice(1)}`;
+      await expectSidecar(`${wrongDigest}  ${basename(archive)}\n`, false);
+      await expectSidecar(`${checksumLine}\nextra record\n`, false);
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  },
+);
 
 test('maps runner identity explicitly and accepts only a canonical Handle preflight no-match', async () => {
   const workflow = await readFile(resolve(projectRoot, '.github/workflows/desktop.yml'), 'utf8');

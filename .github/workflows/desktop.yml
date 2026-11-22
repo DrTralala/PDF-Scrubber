@@ -347,10 +347,13 @@ jobs:
           [[ ${#checksums[@]} -eq 1 && -f "${checksums[0]}" ]]
           checksum="${archive}.sha256"
           [[ "$checksum" == "${checksums[0]}" && -f "$checksum" ]]
-          expected_hash=$(awk 'NR == 1 { print $1 }' "$checksum")
-          expected_name=$(awk 'NR == 1 { print $2 }' "$checksum")
           actual_hash=$(sha256sum "$archive" | awk '{ print $1 }')
-          [[ "$expected_hash" == "$actual_hash" && "$expected_name" == "$(basename "$archive")" ]]
+          expected_checksum="$actual_hash  $(basename "$archive")"
+          if ! printf '%s\n' "$expected_checksum" | cmp -s - "$checksum" &&
+             ! printf '%s\r\n' "$expected_checksum" | cmp -s - "$checksum"; then
+            printf 'Release checksum sidecar does not match the archive.\n' >&2
+            exit 1
+          fi
 
           existing_assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
           for asset in "$archive" "$checksum" release-assets/provenance.json; do
