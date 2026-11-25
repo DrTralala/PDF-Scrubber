@@ -50,6 +50,49 @@ function Assert-NoReparseTree([string] $Path) {
   }
 }
 
+function Assert-PackagedRuntime([string] $ApplicationDirectory) {
+  $resourcesDirectory = Join-Path $ApplicationDirectory 'resources'
+  $appDirectory = Join-Path $resourcesDirectory 'app'
+  Assert-RegularDirectory $resourcesDirectory 'Electron resources directory'
+  Assert-RegularDirectory $appDirectory 'Unpacked Electron app directory'
+
+  $nodeModulesDirectory = Join-Path $appDirectory 'node_modules'
+  if (Test-Path -LiteralPath $nodeModulesDirectory) {
+    throw "The packaged Electron app must not contain resources/app/node_modules: $nodeModulesDirectory"
+  }
+
+  $localeDirectory = Join-Path $ApplicationDirectory 'locales'
+  Assert-RegularDirectory $localeDirectory 'Electron locale directory'
+  $localePacks = @(
+    Get-ChildItem -LiteralPath $localeDirectory -Filter '*.pak' -File |
+      Sort-Object -Property Name |
+      ForEach-Object Name
+  )
+  $expectedLocalePacks = @('en-GB.pak', 'en-US.pak')
+  if (Compare-Object -ReferenceObject $expectedLocalePacks -DifferenceObject $localePacks) {
+    throw "Electron runtime must contain only the en-GB.pak and en-US.pak locale packs. Found: $($localePacks -join ', ')"
+  }
+
+  foreach ($graphicsAsset in @(
+    'chrome_100_percent.pak',
+    'chrome_200_percent.pak',
+    'd3dcompiler_47.dll',
+    'dxcompiler.dll',
+    'vk_swiftshader.dll'
+  )) {
+    Assert-RegularFile (Join-Path $ApplicationDirectory $graphicsAsset) "Electron graphics runtime asset $graphicsAsset"
+  }
+
+  $webAssetsDirectory = Join-Path $appDirectory 'web/assets'
+  Assert-RegularDirectory $webAssetsDirectory 'Prepared editor web assets'
+  $pdfWorkers = @(
+    Get-ChildItem -LiteralPath $webAssetsDirectory -Filter 'pdf.worker*.mjs' -File -Recurse
+  )
+  if ($pdfWorkers.Count -eq 0) {
+    throw 'Prepared editor web assets are missing the PDF.js worker module.'
+  }
+}
+
 function Get-X64Compiler {
   $compilerOnPath = Get-Command 'cl.exe' -ErrorAction SilentlyContinue
   $programFilesX86 = ${env:ProgramFiles(x86)}
@@ -107,34 +150,21 @@ try {
   Ensure-ArtifactDirectory $artifactRoot 'Desktop artifact directory'
   Assert-RegularDirectory $packageInput 'Prepared desktop package input'
   $packageManifestPath = Join-Path $packageInput 'package.json'
-  $provenancePath = Join-Path $packageInput 'provenance.json'
   Assert-RegularFile $packageManifestPath 'Prepared package manifest'
-  Assert-RegularFile $provenancePath 'Prepared provenance'
 
   $packageManifest = Get-Content -LiteralPath $packageManifestPath -Raw | ConvertFrom-Json
   $version = [string]$packageManifest.version
   if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') {
     throw "Prepared desktop version is not a stable MAJOR.MINOR.PATCH value: $version"
   }
-  $provenanceBytes = [IO.File]::ReadAllBytes($provenancePath)
-  $provenance = [Text.Encoding]::UTF8.GetString($provenanceBytes) | ConvertFrom-Json
-  if ($provenance.schemaVersion -ne 1 -or
-      $provenance.editor.version -ne $version -or
-      $provenance.editor.tag -ne "v$version" -or
-      $provenance.editor.sha -notmatch '^[0-9a-fA-F]{40}$' -or
-      $provenance.packaging.sha -notmatch '^[0-9a-fA-F]{40}$') {
-    throw 'Prepared desktop provenance does not match its stable editor version and full source SHAs.'
-  }
 
   Ensure-ArtifactDirectory $outputDirectory 'Desktop output directory'
   $archiveName = "PDF-Scrubber-${version}-win-x64-portable.7z"
   $archivePath = Join-Path $outputDirectory $archiveName
   $checksumPath = "$archivePath.sha256"
-  $outputProvenance = Join-Path $outputDirectory 'provenance.json'
   if ((Test-Path -LiteralPath $archivePath) -or
-      (Test-Path -LiteralPath $checksumPath) -or
-      (Test-Path -LiteralPath $outputProvenance)) {
-    throw "Refusing to replace existing desktop output: $archivePath, $checksumPath, or $outputProvenance"
+      (Test-Path -LiteralPath $checksumPath)) {
+    throw "Refusing to replace existing desktop output: $archivePath or $checksumPath"
   }
 
   if (-not (Test-Path -LiteralPath $launcherSource -PathType Leaf)) {
@@ -196,6 +226,7 @@ try {
   if (-not (Test-Path -LiteralPath (Join-Path $unpackedApplication 'PDF-Scrubber.exe') -PathType Leaf)) {
     throw 'The unpacked Electron application does not contain PDF-Scrubber.exe.'
   }
+  Assert-PackagedRuntime $unpackedApplication
 
   New-Item -ItemType Directory -Path $stagingDirectory | Out-Null
   $createdStaging = $true
@@ -216,25 +247,20 @@ try {
   foreach ($entry in Get-ChildItem -LiteralPath $unpackedApplication -Force) {
     Copy-Item -LiteralPath $entry.FullName -Destination $runtimeDirectory -Recurse
   }
+  Assert-PackagedRuntime $runtimeDirectory
   [IO.File]::WriteAllText(
     (Join-Path $applicationRoot 'settings.json'),
     "{`n  `"schemaVersion`": 1,`n  `"window`": {`n    `"width`": 1280,`n    `"height`": 860`n  }`n}`n",
     [Text.UTF8Encoding]::new($false)
   )
-  Copy-Item -LiteralPath $provenancePath -Destination (Join-Path $configDirectory 'provenance.json')
-
   $rootEntries = @(Get-ChildItem -LiteralPath $applicationRoot -Force | Sort-Object Name | ForEach-Object Name)
   $expectedRootEntries = @('PDF-Scrubber.exe', 'config', 'settings.json')
   if (Compare-Object -ReferenceObject $expectedRootEntries -DifferenceObject $rootEntries) {
     throw "Portable application root must contain exactly PDF-Scrubber.exe, settings.json, and config/. Found: $($rootEntries -join ', ')"
   }
   $configEntries = @(Get-ChildItem -LiteralPath $configDirectory -Force | Sort-Object Name | ForEach-Object Name)
-  if (Compare-Object -ReferenceObject @('provenance.json', 'runtime') -DifferenceObject $configEntries) {
-    throw "Staged config must contain only provenance.json and runtime/. Found: $($configEntries -join ', ')"
-  }
-  $stagedProvenanceBytes = [IO.File]::ReadAllBytes((Join-Path $configDirectory 'provenance.json'))
-  if ([Convert]::ToBase64String($provenanceBytes) -ne [Convert]::ToBase64String($stagedProvenanceBytes)) {
-    throw 'Staged config/provenance.json differs from the prepared provenance source.'
+  if (Compare-Object -ReferenceObject @('runtime') -DifferenceObject $configEntries) {
+    throw "Staged config must contain only runtime/. Found: $($configEntries -join ', ')"
   }
 
   Push-Location $stagingDirectory
@@ -249,9 +275,7 @@ try {
   if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
     throw "7-Zip did not produce the expected archive: $archivePath"
   }
-  Copy-Item -LiteralPath $provenancePath -Destination $outputProvenance
   Write-Output "Created $archivePath"
-  Write-Output "Provenance: $outputProvenance"
 } finally {
   if ($previousElectronBuildOutput -eq $null) {
     Remove-Item Env:PDF_SCRUBBER_ELECTRON_BUILD_OUTPUT -ErrorAction SilentlyContinue

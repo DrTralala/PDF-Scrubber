@@ -70,7 +70,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24.18.0'
+          node-version: '24.22.1'
 
       - name: Resolve and verify source identities
         id: identities
@@ -119,16 +119,14 @@ jobs:
         working-directory: editor-source
         run: npm run build --workspace @pdf-editor/web -- --outDir ../../artifacts/desktop/editor-assets --emptyOutDir
 
-      - name: Prepare desktop package and provenance
+      - name: Prepare desktop package
         shell: pwsh
         env:
           EDITOR_TAG: ${{ steps.identities.outputs.editor_tag }}
           EDITOR_VERSION: ${{ steps.identities.outputs.editor_version }}
-          EDITOR_SHA: ${{ steps.identities.outputs.editor_sha }}
-          PACKAGING_SHA: ${{ steps.identities.outputs.packaging_sha }}
         run: |
           $editorAssets = Join-Path $env:GITHUB_WORKSPACE 'editor-source/artifacts/desktop/editor-assets'
-          npm run desktop:prepare -- --editor-assets $editorAssets --editor-tag $env:EDITOR_TAG --editor-version $env:EDITOR_VERSION --editor-sha $env:EDITOR_SHA --packaging-sha $env:PACKAGING_SHA --output artifacts/desktop/package-input
+          npm run desktop:prepare -- --editor-assets $editorAssets --editor-tag $env:EDITOR_TAG --editor-version $env:EDITOR_VERSION --output artifacts/desktop/package-input
           if ($LASTEXITCODE -ne 0) { throw 'Desktop packaging preparation failed.' }
 
       - name: Build unsigned Windows x64 portable executable
@@ -277,8 +275,6 @@ jobs:
           $archives = @(Get-ChildItem -LiteralPath 'artifacts/desktop/output' -Filter '*.7z' -File)
           if ($archives.Count -ne 1) { throw "Expected one final portable .7z archive, found $($archives.Count)." }
           $archive = $archives[0]
-          Copy-Item -LiteralPath 'artifacts/desktop/package-input/provenance.json' `
-            -Destination 'artifacts/desktop/output/provenance.json' -Force
           $hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $($archive.Name)" | Out-File -LiteralPath "$($archive.FullName).sha256" -Encoding ascii
 
@@ -307,7 +303,6 @@ jobs:
           path: |
             artifacts/desktop/output/*.7z
             artifacts/desktop/output/*.7z.sha256
-            artifacts/desktop/output/provenance.json
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
@@ -336,9 +331,6 @@ jobs:
           set -euo pipefail
           [[ "$EDITOR_SHA" == "$RELEASE_SHA" ]]
           [[ "$PACKAGING_SHA" == "$RELEASE_SHA" ]]
-          jq -e --arg tag "$RELEASE_TAG" --arg editor "$EDITOR_SHA" --arg packaging "$PACKAGING_SHA" \
-            '.editor.tag == $tag and .editor.sha == $editor and .packaging.sha == $packaging' \
-            release-assets/provenance.json >/dev/null
 
           mapfile -t archives < <(printf '%s\n' release-assets/*.7z)
           [[ ${#archives[@]} -eq 1 && -f "${archives[0]}" ]]
@@ -356,7 +348,7 @@ jobs:
           fi
 
           existing_assets=$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')
-          for asset in "$archive" "$checksum" release-assets/provenance.json; do
+          for asset in "$archive" "$checksum"; do
             name=$(basename "$asset")
             if printf '%s\n' "$existing_assets" | awk -v name="$name" '$0 == name { found = 1 } END { exit !found }'; then
               printf 'Refusing to overwrite existing release asset: %s\n' "$name" >&2
@@ -364,5 +356,5 @@ jobs:
             fi
           done
 
-          gh release upload "$RELEASE_TAG" "$archive" "$checksum" release-assets/provenance.json \
+          gh release upload "$RELEASE_TAG" "$archive" "$checksum" \
             --repo "$GITHUB_REPOSITORY"

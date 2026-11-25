@@ -49,24 +49,23 @@ test('root README exposes stable release badges and npm usage guidance', async (
     readdir(resolve(projectRoot, '.github/workflows')),
   ]);
   const workflowBadge = readme.match(
-    /^\[!\[CI\]\(https:\/\/github\.com\/DrTralala\/PDF-Scrubber\/actions\/workflows\/([^/)]+)\/badge\.svg\)\]\(https:\/\/github\.com\/DrTralala\/PDF-Scrubber\/actions\/workflows\/([^/)]+)\)$/m,
+    /^\[!\[Verify\]\(https:\/\/github\.com\/DrTralala\/PDF-Scrubber\/actions\/workflows\/([^/)]+)\/badge\.svg\)\]\(https:\/\/github\.com\/DrTralala\/PDF-Scrubber\/actions\/workflows\/([^/)]+)\)$/m,
   );
 
   expect(workflowBadge).not.toBeNull();
   expect(workflowBadge?.[1]).toBe('verify.yml');
   expect(workflowBadge?.[2]).toBe(workflowBadge?.[1]);
   expect(workflowFiles).toContain(workflowBadge?.[1]);
-  expect(readme).toMatch(/^\[!\[License: MIT\]\(.*\)$/m);
-  expect(readme).toMatch(/^\[!\[Node\.js\]\(.*\)$/m);
-  expectInOrder(readme, ['npx pdf-scrubber@latest', 'npx pdf-scrubber@1.1.0']);
-  expect(readme).toContain('pdf-scrubber@1.1.0');
+  expect(readme).toMatch(/^\[!\[Licence: MIT\]\(.*\)$/m);
+  expect(readme).toMatch(/^\[!\[Node\.js 24\.22\.1\]\(.*\)$/m);
+  expectInOrder(readme, ['npx pdf-scrubber@latest', 'npx pdf-scrubber@1.2.0']);
   expect(readme).toMatch(/^\[!\[Version\]\(https:\/\/img\.shields\.io\/github\/v\/release\/DrTralala\/PDF-Scrubber\?label=version&color=blue&sort=date&style=flat-square\)\]\(https:\/\/github\.com\/DrTralala\/PDF-Scrubber\/releases\/latest\)$/m);
   expect(readme).toMatch(/^## Source development$/m);
-  expect(readme).toMatch(/## Source development[\s\S]*Build and run PDF-Scrubber from a source checkout:[\s\S]*npm ci[\s\S]*npm start/);
+  expect(readme).toMatch(/## Source development[\s\S]*From the repository root:[\s\S]*npm ci[\s\S]*npm start/);
   expect(readme).not.toMatch(/^## Supported editing$/m);
   expect(readme).not.toMatch(/GitHub source is private|authorised contributors/i);
-  expect(readme).toMatch(/loopback-only serving/i);
-  expect(readme).toMatch(/port 5173.*fallback/i);
+  expect(readme).toMatch(/serves the editor on loopback only/i);
+  expect(readme).toMatch(/port `5173`.*fallback/i);
 });
 
 test('stable release guard rejects malformed v1.1.0 claims while allowing generic npm guidance', () => {
@@ -74,7 +73,7 @@ test('stable release guard rejects malformed v1.1.0 claims while allowing generi
 
   expect(allowedPreReleaseReadme).not.toMatch(STABLE_RELEASE_CLAIM);
   for (const allowedText of [
-    'Requires Node.js 24.18.0.',
+    'Requires Node.js 24.22.1.',
     '{"name":"pdf-scrubber","version":"0.0.1"}',
     'Version-specific release metadata is intentionally deferred.',
   ]) {
@@ -98,8 +97,7 @@ test('stable release guard rejects malformed v1.1.0 claims while allowing generi
 test('CLI README preserves runnable usage and avoids stale assembly wording', async () => {
   const packageReadme = await readFile(resolve(projectRoot, 'apps/cli/README.md'), 'utf8');
 
-  expectInOrder(packageReadme, ['npx pdf-scrubber@latest', 'npx pdf-scrubber@1.1.0']);
-  expect(packageReadme).toContain('pdf-scrubber@1.1.0');
+  expectInOrder(packageReadme, ['npx pdf-scrubber@latest', 'npx pdf-scrubber@1.2.0']);
   expect(packageReadme).toMatch(/loopback[\s\S]*port 5173[\s\S]*fallback[\s\S]*Ctrl-C/);
   expect(packageReadme).toMatch(/PDF and font processing remains local to the browser/);
   expect(packageReadme).toMatch(/GitHub source is public/);
@@ -114,24 +112,25 @@ test('root README documents the portable .7z layout, settings and safe updates',
   const portableSection = readme.slice(readme.indexOf('## Windows portable app'));
 
   expect(portableSection).toContain('PDF-Scrubber-<version>-win-x64-portable.7z');
-  expect(portableSection).toMatch(/extract its entire `PDF-Scrubber\/` folder/i);
+  expect(portableSection).toMatch(/extract the complete `PDF-Scrubber\/` folder/i);
   expect(portableSection).toContain('PDF-Scrubber/\n  PDF-Scrubber.exe\n  settings.json\n  config/');
-  expect(portableSection).toContain('{"schemaVersion":1,"window":{"width":1280,"height":860}}');
-  expect(portableSection).toMatch(/schema version 1 is strict/i);
+  const settingsExample = portableSection.match(/```json\s+([\s\S]*?)```/);
+  expect(JSON.parse(settingsExample?.[1] ?? 'null')).toEqual({schemaVersion: 1, window: {width: 1280, height: 860}});
+  expect(portableSection).toMatch(/schema is strict.*`schemaVersion` must be `1`/i);
   expect(portableSection).toMatch(/width.*integer.*760.*16384/i);
   expect(portableSection).toMatch(/height.*integer.*560.*16384/i);
-  expect(portableSection).toMatch(/unknown keys.*fail visibly/i);
-  expect(portableSection).toMatch(/malformed or invalid settings are not silently overwritten/i);
-  expect(portableSection).toMatch(/closing it and moving the entire folder/i);
-  expect(portableSection).toMatch(/extract the new release separately/i);
+  expect(portableSection).toMatch(/unknown keys.*visible error/i);
+  expect(portableSection).toMatch(/malformed.*invalid settings are not silently overwritten/i);
+  expect(portableSection).toMatch(/move the entire folder only when the app is closed/i);
+  expect(portableSection).toMatch(/extract the new release to a separate folder/i);
   expect(portableSection).toMatch(/with both copies closed/i);
-  expect(portableSection).toMatch(/preserve.*settings\.json.*config\/profile/i);
+  expect(portableSection).toMatch(/copy the validated.*settings\.json.*config\/profile/i);
   expect(portableSection).toMatch(/do not copy.*config\/runtime/i);
-  expect(portableSection).toMatch(/do not blindly overwrite.*settings/i);
+  expect(portableSection).toMatch(/do not copy.*or blindly replace your settings/i);
   expect(portableSection).toMatch(/AppData.*not migrated or removed automatically/i);
-  expect(portableSection).toMatch(/does not require a separately installed Node\.js/i);
+  expect(portableSection).toMatch(/No separate Node\.js installation or installer is needed/i);
   expect(portableSection).toMatch(/unsigned.*Windows may show a security warning/i);
-  expect(portableSection).toMatch(/not a zero-OS-traces guarantee/i);
+  expect(portableSection).toMatch(/may write data outside the application folder/i);
   expect(portableSection).not.toContain('PDF-Scrubber-<version>-win-x64-portable.exe');
   expect(portableSection).not.toMatch(/download[^\n]*self-extracting/i);
 });
@@ -146,21 +145,17 @@ test('future release instructions require tested portable archives without chang
     'smoke-test the actual root launcher from the final `.7z` after extraction',
     'before attaching assets',
   ]);
-  expect(instructions).toMatch(/the `\.7z` archive, matching SHA-256 file and provenance/i);
+  expect(instructions).toMatch(/the `\.7z` archive and matching SHA-256 file/i);
   expect(instructions).toMatch(/Attach assets to the existing release only.*Windows archive smoke/i);
   expect(instructions).toMatch(/app-managed state.*under `config\/`/i);
   expect(instructions).toMatch(/not a zero-OS-traces guarantee/i);
   expect(instructions).toContain('never handle npm publish tokens or run ordinary local `npm publish`');
 });
 
-test('release boundaries do not add a changelog or provenance claim', async () => {
-  const [{ stdout: trackedFiles }, packageReadme] = await Promise.all([
-    execFileAsync('git', ['ls-files'], { cwd: projectRoot }),
-    readFile(resolve(projectRoot, 'apps/cli/README.md'), 'utf8'),
-  ]);
+test('release boundaries do not add a changelog', async () => {
+  const { stdout: trackedFiles } = await execFileAsync('git', ['ls-files'], { cwd: projectRoot });
 
   expect(trackedFiles.split('\n').filter((file) => /(?:^|\/)CHANGELOG\.md$/i.test(file))).toEqual([]);
-  expect(packageReadme).not.toMatch(/provenance/i);
 });
 
 test('root and internal workspace packages remain private', async () => {
@@ -222,7 +217,7 @@ test('release verification and publication workflows are pinned and release-only
   for (const workflow of [verifyWorkflow, publishWorkflow]) {
     expect(workflow).toContain('runs-on: ubuntu-latest');
     expect(workflow).toContain('contents: read');
-    expect(workflow).toContain("node-version: '24.18.0'");
+    expect(workflow).toContain("node-version: '24.22.1'");
     expect(workflow).toContain('npm ci');
     expect(workflow).toContain('npx playwright install --with-deps chromium');
     expect(workflow).toContain('sudo apt-get install --no-install-recommends -y poppler-utils');
@@ -309,20 +304,24 @@ test('Windows portable workflow smoke-tests the final archive before checksummin
     'Smoke-test the final portable .7z archive without Handle diagnostics',
     'npm run desktop:smoke -- --archive "$($archive.FullName)" --fixture "$fixture"',
     'Finalise tested portable archive assets',
-    'Copy-Item -LiteralPath',
     '$hash = (Get-FileHash -LiteralPath $archive.FullName -Algorithm SHA256).Hash.ToLowerInvariant()',
     'Upload tested portable build artifact',
   ]);
   expect(workflow).toContain("$archives = @(Get-ChildItem -LiteralPath 'artifacts/desktop/output' -Filter '*.7z' -File)");
   expect(workflow).toContain('artifacts/desktop/output/*.7z');
   expect(workflow).toContain('artifacts/desktop/output/*.7z.sha256');
-  expect(workflow).toContain('artifacts/desktop/output/provenance.json');
   expect(workflow).not.toContain('artifacts/desktop/output/*.exe');
   expect(workflow).toContain('[[ ${#archives[@]} -eq 1 && -f "${archives[0]}" ]]');
   expect(workflow).toContain('checksum="${archive}.sha256"');
   expect(workflow).toContain('[[ "$EDITOR_SHA" == "$RELEASE_SHA" ]]');
   expect(workflow).toContain('[[ "$PACKAGING_SHA" == "$RELEASE_SHA" ]]');
-  expect(workflow).toContain(".editor.sha == $editor and .packaging.sha == $packaging");
+  expect(workflow).toContain('editor_sha: ${{ steps.identities.outputs.editor_sha }}');
+  expect(workflow).toContain('packaging_sha: ${{ steps.identities.outputs.packaging_sha }}');
+  expect(workflow).toContain('$editorHead -ne $editorSha');
+  expect(workflow).toContain('"v$editorVersion" -ne $env:EDITOR_TAG');
+  expect(workflow).toContain('$editorSha -ne $env:EXPECTED_RELEASE_SHA -or $packagingSha -ne $env:EXPECTED_RELEASE_SHA');
+  expect(workflow).toContain('Prepare desktop package');
+  expect(workflow).toContain('--editor-version $env:EDITOR_VERSION --output artifacts/desktop/package-input');
   expectInOrder(workflow, [
     'existing_assets=$(gh release view',
     'Refusing to overwrite existing release asset:',
@@ -339,6 +338,8 @@ test('Windows portable workflow smoke-tests the final archive before checksummin
   expect(portableBuild).toContain('/dependents $launcherExecutable');
   expect(portableBuild).toContain('/dependents $packagedLauncher');
   expect(portableBuild).toContain("The final staged portable launcher imports a separately installed Visual C++ redistributable DLL.");
+  expect(portableBuild).toContain('Assert-PackagedRuntime $unpackedApplication');
+  expect(portableBuild).toContain('Assert-PackagedRuntime $runtimeDirectory');
   expect(portableBuild).toMatch(/VCRUNTIME\|MSVCP\|CONCRT\|MFC/);
   expect(runtimeMain).toContain("event: 'portable-managed-paths'");
   expect(runtimeMain).toContain('tempEnvironment:');

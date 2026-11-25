@@ -42,7 +42,7 @@ type PortableLifecycleInput = Readonly<{
   fixture: string;
 }>;
 
-const EXPECTED_CONFIG_ENTRIES = ['crashes', 'logs', 'profile', 'provenance.json', 'runtime', 'temp'];
+const EXPECTED_CONFIG_ENTRIES = ['crashes', 'logs', 'profile', 'runtime', 'temp'];
 
 type PortableRelocationDependencies = Readonly<{
   queryOwnedProcesses?: OwnedProcessQuery;
@@ -461,6 +461,6 @@ async function readJsonFile(path: string): Promise<unknown> {
 function assertPortableConfigEntries(entries: readonly string[]): void {
   const expected = [...EXPECTED_CONFIG_ENTRIES].sort();
   const actual = [...entries].sort();
-  expect(actual, 'portable config contains only managed storage and the packaged runtime/provenance')
+  expect(actual, 'portable config contains only managed storage and the packaged runtime')
     .toEqual(expected);
 }

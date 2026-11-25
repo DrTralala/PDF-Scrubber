@@ -2,27 +2,15 @@ import { copyFile, cp, lstat, mkdir, readFile, readdir, realpath, rm, writeFile 
 import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-export type DesktopProvenance = Readonly<{
-  schemaVersion: 1;
-  editor: Readonly<{ version: string; tag: string; sha: string }>;
-  packaging: Readonly<{ sha: string }>;
-}>;
-
-type DesktopSourceInput = Readonly<{
-  editorVersion: string;
-  editorSha: string;
-  packagingSha: string;
-}>;
-
-type PrepareDesktopOptions = DesktopSourceInput & Readonly<{
+type PrepareDesktopOptions = Readonly<{
   editorTag: string;
+  editorVersion: string;
   editorAssetsPath: string;
   outputDirectory: string;
   repositoryRoot?: string;
 }>;
 
 const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
-const FULL_GIT_SHA = /^[\da-f]{40}$/i;
 
 export function assertEditorTagVersion(tag: string, version: string): string {
   const stableVersion = assertStableVersion(version);
@@ -33,19 +21,6 @@ export function assertEditorTagVersion(tag: string, version: string): string {
     throw new Error(`Editor tag ${tag} does not match editor package version ${stableVersion}`);
   }
   return stableVersion;
-}
-
-export function createDesktopProvenance(input: DesktopSourceInput): DesktopProvenance {
-  const version = assertStableVersion(input.editorVersion);
-  return Object.freeze({
-    schemaVersion: 1,
-    editor: Object.freeze({
-      version,
-      tag: `v${version}`,
-      sha: assertFullGitSha(input.editorSha, 'editorSha'),
-    }),
-    packaging: Object.freeze({ sha: assertFullGitSha(input.packagingSha, 'packagingSha') }),
-  });
 }
 
 export async function validateEditorAssets(assetsPath: string): Promise<void> {
@@ -150,9 +125,8 @@ export async function assertDesktopOutputDirectory(
   return resolve(currentDirectory, basename(target));
 }
 
-export async function prepareDesktopApp(options: PrepareDesktopOptions): Promise<DesktopProvenance> {
-  const provenance = createDesktopProvenance(options);
-  assertEditorTagVersion(options.editorTag, provenance.editor.version);
+export async function prepareDesktopApp(options: PrepareDesktopOptions): Promise<void> {
+  const version = assertEditorTagVersion(options.editorTag, options.editorVersion);
   await validateEditorAssets(options.editorAssetsPath);
 
   const repositoryRoot = resolve(
@@ -202,16 +176,11 @@ export async function prepareDesktopApp(options: PrepareDesktopOptions): Promise
       copyFile(securityPolicyPath, resolve(outputDirectory, 'security-policy.js')),
       copyFile(staticServerPath, resolve(outputDirectory, 'server.mjs')),
       writeFile(
-        resolve(outputDirectory, 'provenance.json'),
-        `${JSON.stringify(provenance, null, 2)}\n`,
-        { encoding: 'utf8', flag: 'wx' },
-      ),
-      writeFile(
         resolve(outputDirectory, 'package.json'),
         `${JSON.stringify({
           name: 'pdf-scrubber-desktop-app',
           productName: 'PDF-Scrubber',
-          version: provenance.editor.version,
+          version,
           private: true,
           type: 'module',
           main: 'main.cjs',
@@ -226,8 +195,6 @@ export async function prepareDesktopApp(options: PrepareDesktopOptions): Promise
     }
     throw error;
   }
-
-  return provenance;
 }
 
 function assertStableVersion(value: string): string {
@@ -235,13 +202,6 @@ function assertStableVersion(value: string): string {
     throw new Error(`Editor version must be a stable MAJOR.MINOR.PATCH version: ${value}`);
   }
   return value;
-}
-
-function assertFullGitSha(value: string, name: string): string {
-  if (!FULL_GIT_SHA.test(value)) {
-    throw new Error(`${name} must be a full 40-character Git SHA`);
-  }
-  return value.toLowerCase();
 }
 
 async function validateAssetTree(directory: string): Promise<void> {
@@ -307,23 +267,18 @@ async function main(): Promise<void> {
     'editor-assets',
     'editor-tag',
     'editor-version',
-    'editor-sha',
-    'packaging-sha',
     'output',
   ]);
   for (const name of values.keys()) {
     if (!allowedOptions.has(name)) throw new Error(`Unknown option: --${name}`);
   }
 
-  const provenance = await prepareDesktopApp({
+  await prepareDesktopApp({
     editorAssetsPath: resolve(process.cwd(), requiredOption(values, 'editor-assets')),
     editorTag: requiredOption(values, 'editor-tag'),
     editorVersion: requiredOption(values, 'editor-version'),
-    editorSha: requiredOption(values, 'editor-sha'),
-    packagingSha: requiredOption(values, 'packaging-sha'),
     outputDirectory: resolve(process.cwd(), requiredOption(values, 'output')),
   });
-  process.stdout.write(`${JSON.stringify(provenance)}\n`);
 }
 
 const invokedPath = process.argv[1];

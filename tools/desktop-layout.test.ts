@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
-import { readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
 
 import { expect, test } from 'vitest';
 
@@ -19,6 +20,8 @@ test('builds an unpacked Windows app before staging an ordinary .7z archive', as
   };
   const electronBuilderConfig = require('../apps/desktop/electron-builder.config.cjs') as {
     directories?: Readonly<{ app?: string }>;
+    files?: readonly string[];
+    electronLanguages?: readonly string[];
   };
 
   expect(desktopPackage.devDependencies).toMatchObject({
@@ -28,6 +31,8 @@ test('builds an unpacked Windows app before staging an ordinary .7z archive', as
   expect(desktopPackage.scripts?.['build:portable']).toMatch(/build-portable\.ps1/);
   expect(electronBuilderConfig.directories?.app)
     .toBe(resolve(projectRoot, 'artifacts/desktop/package-input'));
+  expect(electronBuilderConfig.files).toEqual(['**/*', '!**/node_modules/**']);
+  expect(electronBuilderConfig.electronLanguages).toEqual(['en-US', 'en-GB']);
   expect(builderConfig).toContain('electron-build');
   expect(builderConfig).not.toMatch(/target:\s*['"]portable['"]|nsis/i);
   expect(buildScript).toContain('PDF-Scrubber-${version}-win-x64-portable.7z');
@@ -35,11 +40,46 @@ test('builds an unpacked Windows app before staging an ordinary .7z archive', as
   expect(buildScript).toContain('settings.json');
   expect(buildScript).toContain('$expectedRootEntries');
   expect(buildScript).toContain('$configEntries');
+  expect(buildScript).toContain('Assert-PackagedRuntime $unpackedApplication');
+  expect(buildScript).toContain('Assert-PackagedRuntime $runtimeDirectory');
+  expect(buildScript).toContain('chrome_100_percent.pak');
+  expect(buildScript).toContain("Join-Path $ApplicationDirectory 'locales'");
+  expect(buildScript).toContain('d3dcompiler_47.dll');
+  expect(buildScript).toContain('dxcompiler.dll');
+  expect(buildScript).not.toMatch(/libEGL\.dll|libGLESv2\.dll/i);
+  expect(buildScript).toContain('PDF.js worker module');
+  expect(buildScript).toContain("foreach ($entry in Get-ChildItem -LiteralPath $unpackedApplication -Force)");
   expect(buildScript).toContain("'PDF-Scrubber'");
   expect(buildScript).not.toMatch(/-sfx|\.exe\.7z/i);
   expect(buildScript).toContain('PDF-Scrubber');
   expect(buildScript).toMatch(/7z(?:\.exe)?/i);
   expect(buildScript).toMatch(/Get-Command|vswhere|VsDevCmd/i);
+});
+
+test('removes dependencies electron-builder auto-collects while preserving app files', async () => {
+  const electronBuilderConfig = require('../apps/desktop/electron-builder.config.cjs') as {
+    afterPack?: (context: Readonly<{ appOutDir: string }>) => Promise<void>;
+  };
+  const temporaryRoot = await mkdtemp(join(tmpdir(), 'pdf-scrubber-electron-pack-test-'));
+  const appDirectory = join(temporaryRoot, 'resources', 'app');
+  const nodeModulesDirectory = join(appDirectory, 'node_modules', 'unexpected-dependency');
+
+  try {
+    expect(electronBuilderConfig.afterPack).toBeTypeOf('function');
+    if (electronBuilderConfig.afterPack === undefined) {
+      throw new Error('The Electron packaging hook is not configured.');
+    }
+    await mkdir(nodeModulesDirectory, { recursive: true });
+    await writeFile(join(appDirectory, 'main.cjs'), 'void 0;');
+    await writeFile(join(nodeModulesDirectory, 'index.js'), 'module.exports = 1;');
+
+    await expect(electronBuilderConfig.afterPack({ appOutDir: temporaryRoot })).resolves.toBeUndefined();
+
+    expect(await readdir(appDirectory)).toEqual(['main.cjs']);
+    await expect(readFile(join(appDirectory, 'main.cjs'), 'utf8')).resolves.toBe('void 0;');
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true });
+  }
 });
 
 test('keeps multiline PowerShell boolean operators on the preceding line', async () => {

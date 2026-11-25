@@ -18,8 +18,8 @@ import {
   archiveName,
   assertPortableArchiveFile,
   assertPortableArchivePaths,
-  assertPortableProvenance,
   assertPortableRootEntries,
+  assertPortableRuntimeEntries,
   parsePortableSmokeArguments,
   parseSevenZipEntries,
 } from './desktop-portable-archive';
@@ -206,20 +206,35 @@ test('reads 7-Zip detailed listings without treating archive metadata as an entr
   expect(() => parseSevenZipEntries('archive has no detailed entries')).toThrow(/listing/);
 });
 
-test('requires archive and sidecar provenance to match every source identity', () => {
-  const inArchive = {
-    schemaVersion: 1,
-    editor: { version: '1.1.0', tag: 'v1.1.0', sha: 'a'.repeat(40) },
-    packaging: { sha: 'b'.repeat(40) },
-  };
+test('requires the final runtime to retain English locale, graphics and PDF worker assets without app dependencies', () => {
+  const runtimeEntries = [
+    'PDF-Scrubber/config/runtime/chrome_100_percent.pak',
+    'PDF-Scrubber/config/runtime/chrome_200_percent.pak',
+    'PDF-Scrubber/config/runtime/d3dcompiler_47.dll',
+    'PDF-Scrubber/config/runtime/dxcompiler.dll',
+    'PDF-Scrubber/config/runtime/vk_swiftshader.dll',
+    'PDF-Scrubber/config/runtime/locales/en-GB.pak',
+    'PDF-Scrubber/config/runtime/locales/en-US.pak',
+    'PDF-Scrubber/config/runtime/resources/app/web/assets/pdf.worker.min-abc123.mjs',
+  ];
 
-  expect(() => assertPortableProvenance(inArchive, inArchive, 'PDF-Scrubber-1.1.0-win-x64-portable.7z'))
-    .not.toThrow();
-  expect(() => assertPortableProvenance(
-    inArchive,
-    { ...inArchive, packaging: { sha: 'c'.repeat(40) } },
-    'PDF-Scrubber-1.1.0-win-x64-portable.7z',
-  )).toThrow(/provenance/i);
+  expect(() => assertPortableRuntimeEntries(runtimeEntries)).not.toThrow();
+  expect(() => assertPortableRuntimeEntries([
+    ...runtimeEntries,
+    'PDF-Scrubber/config/runtime/resources/app/node_modules/pdf-lib/index.js',
+  ])).toThrow(/node_modules/);
+  expect(() => assertPortableRuntimeEntries([
+    ...runtimeEntries,
+    'PDF-Scrubber/config/runtime/locales/fr.pak',
+  ])).toThrow(/locale packs/);
+  expect(() => assertPortableRuntimeEntries(runtimeEntries.map((entry) => entry.replace(
+    'config/runtime/locales/',
+    'config/runtime/resources/locales/',
+  )))).toThrow(/locale packs/);
+  expect(() => assertPortableRuntimeEntries(runtimeEntries.filter((entry) => !entry.endsWith('dxcompiler.dll'))))
+    .toThrow(/graphics asset/);
+  expect(() => assertPortableRuntimeEntries(runtimeEntries.filter((entry) => !entry.includes('pdf.worker'))))
+    .toThrow(/PDF\.js worker/);
 });
 
 test('retains owned-process forced-exit checks and marks negative dialog checks manual', async () => {

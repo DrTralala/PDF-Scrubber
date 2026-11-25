@@ -3,14 +3,16 @@ import { basename, extname } from 'node:path';
 
 export type PortableSmokeArguments = Readonly<{ archive: string; fixture: string }>;
 
-type Provenance = Readonly<{
-  schemaVersion: 1;
-  editor: Readonly<{ version: string; tag: string; sha: string }>;
-  packaging: Readonly<{ sha: string }>;
-}>;
-
 const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const EXPECTED_ROOT_ENTRIES = ['PDF-Scrubber.exe', 'config', 'settings.json'];
+const EXPECTED_LOCALE_PACKS = ['en-gb.pak', 'en-us.pak'];
+const REQUIRED_GRAPHICS_ASSETS = [
+  'chrome_100_percent.pak',
+  'chrome_200_percent.pak',
+  'd3dcompiler_47.dll',
+  'dxcompiler.dll',
+  'vk_swiftshader.dll',
+];
 
 export function archiveName(version: string): string {
   if (!STABLE_VERSION.test(version)) {
@@ -117,45 +119,36 @@ export function assertPortableRootEntries(entries: readonly string[]): void {
   }
 }
 
-export function assertPortableProvenance(
-  embeddedValue: unknown,
-  sidecarValue: unknown,
-  archiveFilename: string,
-): void {
-  const match = /^PDF-Scrubber-((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))-win-x64-portable\.7z$/;
-  const archiveMatch = archiveFilename.match(match);
-  if (archiveMatch === null) throw new Error(`Unexpected portable archive filename: ${archiveFilename}`);
-  const embedded = validateProvenance(embeddedValue);
-  const sidecar = validateProvenance(sidecarValue);
-  if (!sameProvenance(embedded, sidecar)
-    || embedded.editor.version !== archiveMatch[1]
-    || embedded.editor.tag !== `v${embedded.editor.version}`) {
-    throw new Error('Portable archive provenance does not match its sidecar and stable archive version.');
+export function assertPortableRuntimeEntries(paths: readonly string[]): void {
+  const entries = paths.map((path) => path.replaceAll('\\', '/').replace(/\/$/, '').toLowerCase());
+  const entrySet = new Set(entries);
+  const appNodeModules = 'pdf-scrubber/config/runtime/resources/app/node_modules';
+  if (entries.some((path) => path === appNodeModules || path.startsWith(`${appNodeModules}/`))) {
+    throw new Error('Portable runtime must not contain resources/app/node_modules.');
   }
-}
 
-function validateProvenance(value: unknown): Provenance {
-  if (value === null || typeof value !== 'object') throw new Error('Portable provenance must be an object');
-  const candidate = value as Partial<Provenance>;
-  if (candidate.schemaVersion !== 1
-    || candidate.editor === undefined
-    || typeof candidate.editor.version !== 'string'
-    || !STABLE_VERSION.test(candidate.editor.version)
-    || candidate.editor.tag !== `v${candidate.editor.version}`
-    || !/^[0-9a-f]{40}$/.test(candidate.editor.sha)
-    || candidate.packaging === undefined
-    || !/^[0-9a-f]{40}$/.test(candidate.packaging.sha)) {
-    throw new Error('Portable provenance has an invalid schema, version, tag, or source SHA.');
+  const localePacks = entries
+    .filter((path) => path.startsWith('pdf-scrubber/config/runtime/locales/') && path.endsWith('.pak'))
+    .map((path) => path.slice(path.lastIndexOf('/') + 1))
+    .sort();
+  if (localePacks.length !== EXPECTED_LOCALE_PACKS.length
+    || localePacks.some((locale, index) => locale !== EXPECTED_LOCALE_PACKS[index])) {
+    throw new Error('Portable runtime must contain only the en-US and en-GB locale packs.');
   }
-  return candidate as Provenance;
-}
 
-function sameProvenance(first: Provenance, second: Provenance): boolean {
-  return first.schemaVersion === second.schemaVersion
-    && first.editor.version === second.editor.version
-    && first.editor.tag === second.editor.tag
-    && first.editor.sha === second.editor.sha
-    && first.packaging.sha === second.packaging.sha;
+  for (const asset of REQUIRED_GRAPHICS_ASSETS) {
+    if (!entrySet.has(`pdf-scrubber/config/runtime/${asset}`)) {
+      throw new Error(`Portable runtime is missing its Electron graphics asset: ${asset}`);
+    }
+  }
+
+  const hasPdfWorker = entries.some((path) => (
+    path.startsWith('pdf-scrubber/config/runtime/resources/app/web/assets/')
+      && /\/pdf\.worker.*\.mjs$/.test(path)
+  ));
+  if (!hasPdfWorker) {
+    throw new Error('Portable runtime is missing the packaged PDF.js worker module.');
+  }
 }
 
 export function portableArchiveVersion(archivePath: string): string {

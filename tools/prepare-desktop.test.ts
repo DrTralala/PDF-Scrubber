@@ -7,7 +7,6 @@ import { afterEach, expect, test } from 'vitest';
 import {
   assertEditorTagVersion,
   assertDesktopOutputDirectory,
-  createDesktopProvenance,
   prepareDesktopApp,
   validateEditorAssets,
 } from './prepare-desktop';
@@ -29,28 +28,6 @@ test('requires a stable editor package version to match the selected release tag
     .toThrow('must be a stable MAJOR.MINOR.PATCH version');
   expect(() => assertEditorTagVersion('1.0.0', '1.0.0'))
     .toThrow('must be v<version>');
-});
-
-test('records a stable version and both full source revisions', () => {
-  expect(createDesktopProvenance({
-    editorVersion: '1.0.0',
-    editorSha: 'a'.repeat(40),
-    packagingSha: 'b'.repeat(40),
-  })).toEqual({
-    schemaVersion: 1,
-    editor: { version: '1.0.0', tag: 'v1.0.0', sha: 'a'.repeat(40) },
-    packaging: { sha: 'b'.repeat(40) },
-  });
-  expect(() => createDesktopProvenance({
-    editorVersion: 'v1.0.0',
-    editorSha: 'a'.repeat(40),
-    packagingSha: 'b'.repeat(40),
-  })).toThrow('must be a stable MAJOR.MINOR.PATCH version');
-  expect(() => createDesktopProvenance({
-    editorVersion: '1.0.0',
-    editorSha: 'deadbeef',
-    packagingSha: 'b'.repeat(40),
-  })).toThrow('full 40-character Git SHA');
 });
 
 test('rejects packaging assets without a compiled index.html', async () => {
@@ -96,7 +73,7 @@ test('keeps desktop package output beneath artifacts/desktop when parent paths a
   )).rejects.toThrow('not a regular directory');
 });
 
-test('stages the selected editor build with the current wrapper and both source SHAs', async () => {
+test('stages the selected editor build with the current wrapper and stable version', async () => {
   const root = await createTemporaryDirectory();
   const assets = join(root, 'editor-assets');
   const repository = join(root, 'wrapper');
@@ -121,19 +98,24 @@ test('stages the selected editor build with the current wrapper and both source 
     ),
   ]);
 
-  const provenance = await prepareDesktopApp({
+  await prepareDesktopApp({
     editorAssetsPath: assets,
     editorTag: 'v1.0.0',
     editorVersion: '1.0.0',
-    editorSha: 'a'.repeat(40),
-    packagingSha: 'b'.repeat(40),
     outputDirectory: output,
     repositoryRoot: repository,
   });
 
-  expect(provenance.editor.sha).toBe('a'.repeat(40));
-  expect(provenance.packaging.sha).toBe('b'.repeat(40));
-  expect(await readdir(output)).toContain('configuration-error.cjs');
+  expect((await readdir(output)).sort()).toEqual([
+    'configuration-error.cjs',
+    'main.cjs',
+    'package.json',
+    'portable-storage.cjs',
+    'security-policy.js',
+    'server.mjs',
+    'smoke-diagnostics.cjs',
+    'web',
+  ]);
   expect(JSON.parse(await readFile(join(output, 'package.json'), 'utf8'))).toMatchObject({
     version: '1.0.0',
     main: 'main.cjs',
@@ -145,8 +127,6 @@ test('stages the selected editor build with the current wrapper and both source 
   await expect(readFile(join(output, 'portable-storage.cjs'), 'utf8')).resolves.toBe('storage');
   await expect(readFile(join(output, 'smoke-diagnostics.cjs'), 'utf8')).resolves.toBe('smoke diagnostics');
   await expect(readFile(join(output, 'server.mjs'), 'utf8')).resolves.toBe('server');
-  await expect(readFile(join(output, 'provenance.json'), 'utf8'))
-    .resolves.toContain('"packaging"');
 });
 
 async function createTemporaryDirectory(): Promise<string> {

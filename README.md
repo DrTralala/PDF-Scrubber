@@ -3,7 +3,7 @@
 [![Verify](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/verify.yml/badge.svg)](https://github.com/DrTralala/PDF-Scrubber/actions/workflows/verify.yml)
 [![Version](https://img.shields.io/github/v/release/DrTralala/PDF-Scrubber?label=version&color=blue&sort=date&style=flat-square)](https://github.com/DrTralala/PDF-Scrubber/releases/latest)
 [![Licence: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Node.js 24.18.0](https://img.shields.io/badge/Node.js-24.18.0-339933.svg)](https://nodejs.org/)
+[![Node.js 24.22.1](https://img.shields.io/badge/Node.js-24.22.1-339933.svg)](https://nodejs.org/)
 
 Edit existing text in supported machine-readable PDFs in a local browser editor. PDF-Scrubber keeps PDF and uploaded-font processing in the browser; its CLI serves the editor on loopback only.
 
@@ -11,7 +11,7 @@ Edit existing text in supported machine-readable PDFs in a local browser editor.
 
 ## Quick start
 
-You need Node.js 24.18.0 and npm. No global installation or additional configuration is required.
+You need Node.js 24.22.1 and npm. No global installation or additional configuration is required.
 
 > [!IMPORTANT]
 > The CLI binds to `127.0.0.1`. Keep it on loopback, and use the printed loopback URL. If you need Local Font Access, do not open the editor through a WSL network URL.
@@ -22,10 +22,10 @@ Run the latest published CLI without installing it globally:
 npx pdf-scrubber@latest
 ```
 
-For a reproducible run of the current stable release, pin the package version:
+For a reproducible run, pin the package version:
 
 ```bash
-npx pdf-scrubber@1.1.0
+npx pdf-scrubber@1.2.0
 ```
 
 The CLI prints a local URL and tries to open it in your browser. It uses port `5173` by default and selects an available fallback port if needed. If the browser does not open, visit the printed URL. Press **Ctrl-C** to stop the server.
@@ -60,7 +60,7 @@ A PDF below 15 MiB can still exceed another limit. Unsupported PDF features or m
 
 The launcher is unsigned, so Windows may show a security warning. Portable does not mean that no operating-system traces are created: Windows, drivers, security software, native dialogs, paging or crash collection may write data outside the application folder.
 
-Stable, non-prerelease [GitHub releases](https://github.com/DrTralala/PDF-Scrubber/releases/latest) include a tested Windows x64 portable `.7z` archive, its SHA-256 checksum and source provenance. Extract the complete `PDF-Scrubber/` folder and run its root `PDF-Scrubber.exe`:
+Stable, non-prerelease [GitHub releases](https://github.com/DrTralala/PDF-Scrubber/releases/latest) include a tested Windows x64 portable archive (`PDF-Scrubber-<version>-win-x64-portable.7z`) and its SHA-256 checksum. Extract the complete `PDF-Scrubber/` folder and run its root `PDF-Scrubber.exe`:
 
 ```text
 PDF-Scrubber/
@@ -88,7 +88,7 @@ Maintainers can dispatch the [Windows portable workflow](.github/workflows/deskt
 
 ## Source development
 
-The workspace requires the exact Node.js version in `package.json` and the lockfile: 24.18.0. From the repository root:
+The workspace requires the exact Node.js version in `package.json` and the lockfile: 24.22.1. From the repository root:
 
 ```bash
 npm ci
@@ -141,7 +141,7 @@ npm run validate:large-pdfs
 | `tests/1`, `tests/2`, `tests/3` | Committed multi-language PDF validation suites |
 | `tools/` | Test runners, PDF inspection, fixture validation and project checks |
 
-The root workspace and internal packages are private; only `apps/cli/` is published to npm. Stable GitHub releases also include the tested Windows archive, checksum and provenance.
+The root workspace and internal packages are private; only `apps/cli/` is published to npm. Stable GitHub releases also include the tested Windows archive and checksum.
 
 ## Licence
 

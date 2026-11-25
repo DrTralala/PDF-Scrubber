@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { once } from 'node:events';
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
@@ -12,8 +12,8 @@ import {
   archiveName,
   assertPortableArchiveFile,
   assertPortableArchivePaths,
-  assertPortableProvenance,
   assertPortableRootEntries,
+  assertPortableRuntimeEntries,
   parsePortableSmokeArguments,
   parseSevenZipEntries,
   portableArchiveVersion,
@@ -54,6 +54,7 @@ export async function smokePortableArchive(archive: string, fixture: string): Pr
     });
     const archivePaths = parseSevenZipEntries(listing.stdout);
     assertPortableArchivePaths(archivePaths);
+    assertPortableRuntimeEntries(archivePaths);
 
     const extractionDirectory = join(temporaryRoot, 'extracted');
     await mkdir(extractionDirectory);
@@ -77,25 +78,12 @@ export async function smokePortableArchive(archive: string, fixture: string): Pr
     const runtimeExecutable = join(configDirectory, 'runtime', 'PDF-Scrubber.exe');
     const launcherExecutable = join(applicationRoot, 'PDF-Scrubber.exe');
     const settingsPath = join(applicationRoot, 'settings.json');
-    const embeddedProvenancePath = join(configDirectory, 'provenance.json');
-    const sidecarProvenancePath = join(dirname(archive), 'provenance.json');
-    for (const requiredPath of [
-      launcherExecutable,
-      runtimeExecutable,
-      settingsPath,
-      embeddedProvenancePath,
-      sidecarProvenancePath,
-    ]) {
+    for (const requiredPath of [launcherExecutable, runtimeExecutable, settingsPath]) {
       const details = await stat(requiredPath);
       if (!details.isFile()) throw new Error(`Portable archive contract file is not a file: ${requiredPath}`);
     }
 
-    const [embeddedProvenance, sidecarProvenance, initialSettings] = await Promise.all([
-      readJsonFile(embeddedProvenancePath),
-      readJsonFile(sidecarProvenancePath),
-      readJsonFile(settingsPath),
-    ]);
-    assertPortableProvenance(embeddedProvenance, sidecarProvenance, basename(archive));
+    const initialSettings = await readJsonFile(settingsPath);
     expect(initialSettings).toEqual({
       schemaVersion: 1,
       window: { width: 1280, height: 860 },

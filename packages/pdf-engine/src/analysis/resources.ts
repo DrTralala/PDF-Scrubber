@@ -269,26 +269,53 @@ async function simpleFontDecoder(
 }
 
 function cidWidths(descendant: PDFDict): ReadonlyMap<number, number> {
+  // Type0 decoding currently produces two-byte identity CIDs.
+  const maxCid = 0xffff;
+  let remainingWidths = maxCid + 1;
   const widths = new Map<number, number>();
   const values = descendant.lookupMaybe(PDFName.of('W'), PDFArray);
   if (values === undefined) return widths;
   let index = 0;
-  while (index < values.size()) {
-    const first = values.lookupMaybe(index, PDFNumber)?.asNumber();
-    if (first === undefined) break;
-    const secondArray = values.lookupMaybe(index + 1, PDFArray);
-    if (secondArray !== undefined) {
-      for (let item = 0; item < secondArray.size(); item += 1) {
-        const width = secondArray.lookupMaybe(item, PDFNumber)?.asNumber();
-        if (width !== undefined) widths.set(first + item, width);
+  while (index < values.size() && remainingWidths > 0) {
+    const firstValue = values.lookup(index);
+    if (!(firstValue instanceof PDFNumber)) break;
+    const first = firstValue.asNumber();
+    if (!Number.isFinite(first) || !Number.isInteger(first)) break;
+    const secondValue = values.lookup(index + 1);
+    if (secondValue instanceof PDFArray) {
+      const firstItem = Math.max(0, -first);
+      const lastItem = Math.min(
+        secondValue.size(),
+        maxCid - first + 1,
+        firstItem + remainingWidths,
+      );
+      for (let item = firstItem; item < lastItem; item += 1) {
+        const widthValue = secondValue.lookup(item);
+        const code = first + item;
+        if (widthValue instanceof PDFNumber) {
+          const width = widthValue.asNumber();
+          if (Number.isFinite(width)) widths.set(code, width);
+        }
+        remainingWidths -= 1;
       }
       index += 2;
       continue;
     }
-    const last = values.lookupMaybe(index + 1, PDFNumber)?.asNumber();
-    const width = values.lookupMaybe(index + 2, PDFNumber)?.asNumber();
-    if (last === undefined || width === undefined) break;
-    for (let code = first; code <= last; code += 1) widths.set(code, width);
+    if (!(secondValue instanceof PDFNumber)) break;
+    const last = secondValue.asNumber();
+    const widthValue = values.lookup(index + 2);
+    if (!(widthValue instanceof PDFNumber)) break;
+    const width = widthValue.asNumber();
+    if (!Number.isFinite(last) || !Number.isInteger(last) || !Number.isFinite(width)) {
+      index += 3;
+      continue;
+    }
+    const firstCode = Math.max(first, 0);
+    const lastCode = Math.min(last, maxCid, firstCode + remainingWidths - 1);
+    for (let code = firstCode; code <= lastCode; code += 1) {
+      widths.set(code, width);
+      remainingWidths -= 1;
+    }
     index += 3;
   }
   return widths;
