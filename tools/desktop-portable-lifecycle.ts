@@ -212,7 +212,7 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
     await first.page.getByLabel('Edit selected text').fill('Portable desktop edit');
     await expandAllowedWidth(first.page);
     await acceptRichFontSubstitutions(first.page);
-    const apply = first.page.getByRole('button', { name: 'Apply replacement' });
+    const apply = first.page.getByRole('button', { name: /^Apply(?: replacement)?$/ });
     await expect(apply).toBeEnabled({ timeout: 20_000 });
     await apply.click();
     await expect(first.page.getByRole('button', { name: /Portable desktop edit — Editable/ }))
