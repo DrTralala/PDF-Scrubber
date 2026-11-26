@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
-import { expect } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { PDFDocument } from 'pdf-lib';
 import { analysePage, ObjectStore, PROVISIONAL_LIMITS } from '@pdf-editor/pdf-engine';
 
@@ -45,6 +45,7 @@ type PortableLifecycleInput = Readonly<{
 }>;
 
 const EXPECTED_CONFIG_ENTRIES = ['crashes', 'logs', 'profile', 'runtime', 'temp'];
+const NATIVE_BEFOREUNLOAD_WAIT_TIMEOUT_MS = 15_000;
 
 type PortableRelocationDependencies = Readonly<{
   queryOwnedProcesses?: OwnedProcessQuery;
@@ -387,7 +388,8 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
 
 async function exerciseUnsavedCloseFlow(session: AppSession): Promise<void> {
   for (const [attempt, response] of [[1, 'Enter'], [2, 'Escape']] as const) {
-    await sendPortableWindowKey(session, 'AltF4');
+    const beforeUnloadEvent = waitForBeforeUnloadDialogEvent(session.page);
+    await Promise.all([beforeUnloadEvent, sendPortableWindowKey(session, 'AltF4')]);
     await waitForDiagnosticRecord(
       () => readPortableDiagnostics(session),
       `unsaved-close-prompt-${attempt}`,
@@ -398,7 +400,8 @@ async function exerciseUnsavedCloseFlow(session: AppSession): Promise<void> {
     await expect(session.page.getByTestId('pdf-canvas')).toBeVisible();
   }
 
-  await sendPortableWindowKey(session, 'AltF4');
+  const beforeUnloadEvent = waitForBeforeUnloadDialogEvent(session.page);
+  await Promise.all([beforeUnloadEvent, sendPortableWindowKey(session, 'AltF4')]);
   await waitForDiagnosticRecord(
     () => readPortableDiagnostics(session),
     'unsaved-close-prompt-3',
@@ -406,6 +409,19 @@ async function exerciseUnsavedCloseFlow(session: AppSession): Promise<void> {
   );
   await sendPortableWindowKey(session, 'TabEnter');
   await waitForChildExit(session.child, 15_000);
+}
+
+export async function waitForBeforeUnloadDialogEvent(
+  page: Pick<Page, 'waitForEvent'>,
+): Promise<void> {
+  // Playwright auto-accepts beforeunload dialogs when nobody is listening. Listen
+  // before Alt+F4, but do not handle this CDP event: the actual response belongs
+  // to Electron's native modal and the Windows smoke helper.
+  const dialog = await page.waitForEvent('dialog', { timeout: NATIVE_BEFOREUNLOAD_WAIT_TIMEOUT_MS });
+  const type = dialog.type();
+  if (type !== 'beforeunload') {
+    throw new Error(`Expected a beforeunload dialog event for the native close flow; received ${type}.`);
+  }
 }
 
 async function sendPortableWindowKey(

@@ -7,7 +7,10 @@ import { expect, test } from 'vitest';
 
 import { chromium, type Browser } from '@playwright/test';
 
-import { chooseFittingNonDefaultWindowSize } from './desktop-portable-lifecycle';
+import {
+  chooseFittingNonDefaultWindowSize,
+  waitForBeforeUnloadDialogEvent,
+} from './desktop-portable-lifecycle';
 import {
   assertPortableWindowFitsWorkArea,
   assertPortableWindowRecord,
@@ -144,6 +147,33 @@ test('chooses a genuinely fitting non-default custom window size from the observ
   expect(() => assertPortableWindowFitsWorkArea(customRecord, 900, 640)).not.toThrow();
   expect(() => assertPortableWindowFitsWorkArea(customRecord, 1200, 800)).toThrow(/does not fit/);
   expect(() => chooseFittingNonDefaultWindowSize({ width: 759, height: 560 })).toThrow();
+});
+
+test('leaves Electron-owned beforeunload prompts open for native window-key responses', async () => {
+  const dialogActions: string[] = [];
+  const page = {
+    waitForEvent: async (event: string, options?: Readonly<{ timeout?: number }>) => {
+      expect(event).toBe('dialog');
+      expect(options).toEqual({ timeout: 15_000 });
+      return {
+        type: () => 'beforeunload',
+        accept: async () => { dialogActions.push('accept'); },
+        dismiss: async () => { dialogActions.push('dismiss'); },
+      };
+    },
+  } as unknown as Pick<import('@playwright/test').Page, 'waitForEvent'>;
+
+  await expect(waitForBeforeUnloadDialogEvent(page)).resolves.toBeUndefined();
+  expect(dialogActions).toEqual([]);
+});
+
+test('does not mistake another JavaScript dialog for an Electron beforeunload prompt', async () => {
+  const page = {
+    waitForEvent: async () => ({ type: () => 'alert' }),
+  } as unknown as Pick<import('@playwright/test').Page, 'waitForEvent'>;
+
+  await expect(waitForBeforeUnloadDialogEvent(page))
+    .rejects.toThrow('Expected a beforeunload dialog event for the native close flow; received alert.');
 });
 
 test('routes Electron CI diagnostics to the file-backed sink without direct stdout writes', async () => {
@@ -301,6 +331,18 @@ test('smokes current save-copy and dirty-close behaviour while retaining histori
   expect(lifecycle).toContain("name: 'Download copy'");
   expect(lifecycle).toContain('fileSystemPickerSupport');
   expect(lifecycle).toContain('await exerciseUnsavedCloseFlow(first);');
+  expect(lifecycle.match(/const beforeUnloadEvent = waitForBeforeUnloadDialogEvent\(session\.page\);/g))
+    .toHaveLength(2);
+  expect(lifecycle).toMatch(
+    /const beforeUnloadEvent = waitForBeforeUnloadDialogEvent\(session\.page\);\s*await Promise\.all\(\[beforeUnloadEvent, sendPortableWindowKey\(session, 'AltF4'\)\]\);/,
+  );
+  expect(lifecycle).toContain("page.waitForEvent('dialog', { timeout: NATIVE_BEFOREUNLOAD_WAIT_TIMEOUT_MS })");
+  expect(lifecycle).toContain("if (type !== 'beforeunload')");
+  expect(lifecycle).not.toMatch(/dialog\.(?:accept|dismiss)\(/);
+  expect(lifecycle).toContain("[[1, 'Enter'], [2, 'Escape']] as const");
+  expect(lifecycle).toContain("sendPortableWindowKey(session, 'TabEnter')");
+  expect(lifecycle).toContain('await waitForChildExit(session.child, 15_000);');
+  expect(lifecycle).toContain('expect(session.page.isClosed()).toBe(false);');
   expect(lifecycle).toContain("await sendPortableWindowKey(repeat, 'AltF4');");
   expect(lifecycle).toContain('cleanCloseCheck');
   expect(lifecycle).toContain("const dirtyCloseCheck = supportsSaveAs ? 'passed' : 'skipped-legacy-editor';");
