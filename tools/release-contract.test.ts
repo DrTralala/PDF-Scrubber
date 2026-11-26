@@ -58,7 +58,7 @@ test('root README exposes stable release badges and npm usage guidance', async (
   expect(workflowFiles).toContain(workflowBadge?.[1]);
   expect(readme).toMatch(/^\[!\[Licence: MIT\]\(.*\)$/m);
   expect(readme).toMatch(/^\[!\[Node\.js 24\.22\.1\]\(.*\)$/m);
-  expectInOrder(readme, ['npx pdf-scrubber@latest', 'npx pdf-scrubber@1.2.0']);
+  expectInOrder(readme, ['npx pdf-scrubber@latest', 'npx pdf-scrubber@1.3.0']);
   expect(readme).toMatch(/^\[!\[Version\]\(https:\/\/img\.shields\.io\/github\/v\/release\/DrTralala\/PDF-Scrubber\?label=version&color=blue&sort=date&style=flat-square\)\]\(https:\/\/github\.com\/DrTralala\/PDF-Scrubber\/releases\/latest\)$/m);
   expect(readme).toMatch(/^## Source development$/m);
   expect(readme).toMatch(/## Source development[\s\S]*From the repository root:[\s\S]*npm ci[\s\S]*npm start/);
@@ -97,7 +97,7 @@ test('stable release guard rejects malformed v1.1.0 claims while allowing generi
 test('CLI README preserves runnable usage and avoids stale assembly wording', async () => {
   const packageReadme = await readFile(resolve(projectRoot, 'apps/cli/README.md'), 'utf8');
 
-  expectInOrder(packageReadme, ['npx pdf-scrubber@latest', 'npx pdf-scrubber@1.2.0']);
+  expectInOrder(packageReadme, ['npx pdf-scrubber@latest', 'npx pdf-scrubber@1.3.0']);
   expect(packageReadme).toMatch(/loopback[\s\S]*port 5173[\s\S]*fallback[\s\S]*Ctrl-C/);
   expect(packageReadme).toMatch(/PDF and font processing remains local to the browser/);
   expect(packageReadme).toMatch(/GitHub source is public/);

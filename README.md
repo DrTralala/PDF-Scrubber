@@ -25,7 +25,7 @@ npx pdf-scrubber@latest
 For a reproducible run, pin the package version:
 
 ```bash
-npx pdf-scrubber@1.2.0
+npx pdf-scrubber@1.3.0
 ```
 
 The CLI prints a local URL and tries to open it in your browser. It uses port `5173` by default and selects an available fallback port if needed. If the browser does not open, visit the printed URL. Press **Ctrl-C** to stop the server.

@@ -22,7 +22,7 @@ const output = execFileSync(
 const report: unknown = JSON.parse(output);
 const entry = packageReportEntry(report);
 
-if (entry.name !== 'pdf-scrubber' || entry.version !== '1.2.0') {
+if (entry.name !== 'pdf-scrubber' || entry.version !== '1.3.0') {
   throw new Error(`Unexpected CLI package identity: ${entry.name}@${entry.version}`);
 }
 

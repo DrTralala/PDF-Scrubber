@@ -1,6 +1,6 @@
 {
   "name": "pdf-scrubber",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Edit supported machine-readable PDF text locally in your browser.",
   "license": "MIT",
   "author": "DrTralala <drtralala@outlook.com>",
