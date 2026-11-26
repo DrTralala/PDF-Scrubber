@@ -15,6 +15,13 @@ type PanOrigin = Readonly<{
   scrollTop: number;
 }>;
 
+type ImageRequest = Readonly<{
+  id: number;
+  file: File;
+  generation: number;
+  pageIndex: number;
+}>;
+
 export function EditorShell({
   controller,
   snapshot,
@@ -24,6 +31,8 @@ export function EditorShell({
 }>): JSX.Element {
   const canvasRef = useRef<HTMLElement>(null);
   const panOrigin = useRef<PanOrigin | null>(null);
+  const nextImageRequest = useRef(0);
+  const [imageRequest, setImageRequest] = useState<ImageRequest | null>(null);
   const [panning, setPanning] = useState(false);
 
   const startPan = (event: PointerEvent<HTMLElement>): void => {
@@ -55,6 +64,17 @@ export function EditorShell({
     setPanning(false);
   };
 
+  const requestImageInsert = (
+    file: File,
+    context: Readonly<{ generation: number; pageIndex: number }>,
+  ): void => {
+    setImageRequest(Object.freeze({ id: ++nextImageRequest.current, file, ...context }));
+  };
+
+  const finishImageInsert = (requestId: number): void => {
+    setImageRequest((current) => current?.id === requestId ? null : current);
+  };
+
   return (
     <div
       className="editor"
@@ -62,7 +82,11 @@ export function EditorShell({
       data-tool={snapshot.tool}
       data-panning={panning || undefined}
     >
-      <EditorChrome controller={controller} snapshot={snapshot} />
+      <EditorChrome
+        controller={controller}
+        snapshot={snapshot}
+        onInsertImage={requestImageInsert}
+      />
       <ToolRail controller={controller} snapshot={snapshot} />
       <main
         ref={canvasRef}
@@ -73,7 +97,12 @@ export function EditorShell({
         onPointerUp={stopPan}
         onPointerCancel={stopPan}
       >
-        <PdfPageView controller={controller} snapshot={snapshot} />
+        <PdfPageView
+          controller={controller}
+          snapshot={snapshot}
+          imageRequest={imageRequest}
+          onImageRequestHandled={finishImageInsert}
+        />
       </main>
       <aside className="inspector" aria-label="Text replacement inspector">
         <ReplacementInspector controller={controller} snapshot={snapshot} />

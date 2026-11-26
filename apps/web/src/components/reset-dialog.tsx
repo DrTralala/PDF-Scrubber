@@ -2,10 +2,12 @@ import type { JSX } from 'react';
 
 export function ResetDialog({
   open,
+  disabled,
   onKeep,
   onReset,
 }: Readonly<{
   open: boolean;
+  disabled: boolean;
   onKeep(): void;
   onReset(): void;
 }>): JSX.Element | null {
@@ -16,7 +18,7 @@ export function ResetDialog({
       <p>This restores the untouched original PDF and removes every replacement.</p>
       <div className="dialog-actions">
         <button type="button" onClick={onKeep}>Keep editing</button>
-        <button type="button" className="destructive" onClick={onReset}>
+        <button type="button" className="destructive" disabled={disabled} onClick={onReset}>
           Reset to original
         </button>
       </div>

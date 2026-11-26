@@ -4,11 +4,16 @@ import {
   type FontDescriptor,
   type HalfOpenRange,
 } from '@pdf-editor/pdf-engine';
-import type { AnalysePageResult } from '@pdf-editor/worker-protocol';
-import { describe, expect, it, vi } from 'vitest';
+import { PNG } from 'pngjs';
+import type {
+  AnalysePageResult,
+  ReplacementPreviewResult,
+} from '@pdf-editor/worker-protocol';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ValidationRejectedError } from '../engine/product-engine-client';
 import { WorkerClientError } from '../engine/worker-client';
+import type { WritablePdfHandle } from '../file-access';
 import { editorError } from '../model/editor-state';
 import {
   analysisFixture,
@@ -64,7 +69,751 @@ async function prepareReplacement(
   await controller.previewSelection();
 }
 
+type ImageInsert = (
+  file: File,
+  context: Readonly<{
+    generation: number;
+    pageIndex: number;
+    center: Readonly<{ x: number; y: number }>;
+  }>,
+) => Promise<void>;
+
+type CurrentDownload = () => Promise<Readonly<{
+  sourceFileName: string;
+  bytes: Uint8Array;
+}> | null>;
+
+function imageFile(name = 'stamp.png'): File {
+  const png = new PNG({ width: 160, height: 80 });
+  png.data.fill(220);
+  return new File([Uint8Array.from(PNG.sync.write(png))], name, { type: 'image/png' });
+}
+
+function jpegFile(): File {
+  return new File([Uint8Array.from(jpegBytes())], 'stamp.jpg', {
+    type: 'image/jpeg',
+  });
+}
+
+function jpegBytes(width = 160, height = 80): Uint8Array {
+  return Uint8Array.of(
+    0xff, 0xd8,
+    0xff, 0xc0, 0x00, 0x11, 0x08,
+    (height >>> 8) & 0xff, height & 0xff,
+    (width >>> 8) & 0xff, width & 0xff,
+    0x03,
+    0x01, 0x11, 0x00,
+    0x02, 0x11, 0x00,
+    0x03, 0x11, 0x00,
+    0xff, 0xd9,
+  );
+}
+
+function overLimitPngFile(): File {
+  const bytes = Uint8Array.from(PNG.sync.write(new PNG({ width: 1, height: 1 })));
+  const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  header.setUint32(16, 4_000, false);
+  header.setUint32(20, 4_000, false);
+  return new File([bytes], 'large.png', { type: 'image/png' });
+}
+
+function overLimitJpegFile(): File {
+  return new File([Uint8Array.from(jpegBytes(4_000, 4_000))], 'large.jpg', { type: 'image/jpeg' });
+}
+
+async function insertImage(
+  controller: EditorController,
+  file: File,
+  center = { x: 306, y: 396 },
+): Promise<void> {
+  const operation = Reflect.get(controller, 'insertImage');
+  expect(operation).toBeTypeOf('function');
+  const snapshot = controller.getSnapshot();
+  await (operation as ImageInsert).call(controller, file, {
+    generation: snapshot.generation,
+    pageIndex: snapshot.pageIndex,
+    center,
+  });
+}
+
+function downloadCurrent(controller: EditorController): Promise<{
+  sourceFileName: string;
+  bytes: Uint8Array;
+} | null> {
+  const operation = Reflect.get(controller, 'downloadCurrent');
+  expect(operation).toBeTypeOf('function');
+  return (operation as CurrentDownload).call(controller);
+}
+
+function memoryFileHandle(name: string): Readonly<{
+  handle: WritablePdfHandle;
+  written: Uint8Array[];
+}> {
+  const written: Uint8Array[] = [];
+  const handle = {
+    name,
+    getFile: vi.fn(),
+    requestPermission: vi.fn().mockResolvedValue('granted'),
+    createWritable: vi.fn().mockImplementation(async () => {
+      let pending = new Uint8Array();
+      return {
+        write: vi.fn().mockImplementation(async (bytes: ArrayBuffer) => {
+          pending = new Uint8Array(bytes.slice(0));
+        }),
+        close: vi.fn().mockImplementation(async () => {
+          written.push(pending.slice());
+        }),
+        abort: vi.fn().mockResolvedValue(undefined),
+      };
+    }),
+  };
+  return { handle: handle as unknown as WritablePdfHandle, written };
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
 describe('EditorController', () => {
+  it('tracks a live span replacement draft as unsaved without changing validated bytes', async () => {
+    const h = createControllerHarness({ analyses: [analysisFixture()] });
+    const source = memoryFileHandle('report.pdf');
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)), source.handle);
+
+    expect(h.controller.getSnapshot().hasUnsavedChanges).toBe(false);
+    h.controller.selectSpan('span-1');
+    h.controller.setReplacement('Unapplied draft');
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      replacement: 'Unapplied draft',
+      hasUnsavedChanges: true,
+    });
+    await h.controller.save();
+
+    expect(source.written).toEqual([Uint8Array.of(1)]);
+    expect(h.controller.getSnapshot().hasUnsavedChanges).toBe(true);
+    expect(h.engines[0]!.applyRevisions).toEqual([]);
+  });
+
+  it('does not silently turn Save into a download when the opened file has no write handle', async () => {
+    const h = createControllerHarness({ analyses: [analysisFixture()] });
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    h.controller.selectSpan('span-1');
+    h.controller.setReplacement('Unapplied draft');
+
+    await h.controller.save();
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      hasUnsavedChanges: true,
+      hasWritableFileHandle: false,
+      status: expect.stringContaining('cannot overwrite'),
+    });
+    expect(h.engines[0]!.applyRevisions).toEqual([]);
+  });
+
+  it('warns for a still-live replacement draft and clears it when selection is discarded', async () => {
+    const h = createControllerHarness({ analyses: [analysisFixture()] });
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    h.controller.selectSpan('span-1');
+    h.controller.setReplacement('Live draft');
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      replacement: 'Live draft',
+      hasUnsavedChanges: true,
+    });
+    h.controller.clearSelection();
+    expect(h.controller.getSnapshot()).toMatchObject({
+      selection: null,
+      replacement: '',
+      hasUnsavedChanges: false,
+    });
+  });
+
+  it('tracks rich-text drafts and does not apply them during Save', async () => {
+    const h = createControllerHarness({ analyses: [textLineAnalysisFixture('ABC')] });
+    const source = memoryFileHandle('report.pdf');
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)), source.handle);
+    h.controller.selectTextRange('line-1', 0, 2, 'group-1');
+    h.controller.replaceRichText({ start: 1, end: 2 }, 'X');
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      replacement: 'AXC',
+      hasUnsavedChanges: true,
+    });
+    await h.controller.save();
+
+    expect(source.written).toEqual([Uint8Array.of(1)]);
+    expect(h.controller.getSnapshot()).toMatchObject({
+      hasUnsavedChanges: true,
+      replacement: 'AXC',
+      phase: 'ready',
+    });
+    expect(h.engines[0]!.richApplyInputs).toHaveLength(0);
+  });
+
+  it('prepares a download-only copy from the opened bytes without marking a live draft saved', async () => {
+    const h = createControllerHarness({ analyses: [analysisFixture()] });
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    h.controller.selectSpan('span-1');
+    h.controller.setReplacement('Unapplied draft');
+
+    await expect(h.controller.downloadCurrentDocument()).resolves.toEqual({
+      sourceFileName: 'report.pdf',
+      bytes: Uint8Array.of(1),
+    });
+    expect(h.controller.getSnapshot().hasUnsavedChanges).toBe(true);
+  });
+
+  it('checkpoints image geometry on Save and marks later movement dirty', async () => {
+    const h = createControllerHarness({
+      analyses: [analysisFixture()],
+      imageExportResults: [
+        { revision: 0, bytes: Uint8Array.of(9, 8, 7) },
+        { revision: 0, bytes: Uint8Array.of(6, 5, 4) },
+      ],
+    });
+    const source = memoryFileHandle('report.pdf');
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 160,
+      height: 80,
+      close: vi.fn(),
+    }));
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:save-image');
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)), source.handle);
+    await insertImage(h.controller, imageFile());
+    const imageId = h.controller.getSnapshot().images[0]!.id;
+    expect(h.controller.getSnapshot().hasUnsavedChanges).toBe(true);
+
+    await h.controller.save();
+    expect(h.controller.getSnapshot().hasUnsavedChanges).toBe(false);
+    h.controller.setImageBounds(imageId, { x: 100, y: 110, width: 160, height: 80 });
+    expect(h.controller.getSnapshot().hasUnsavedChanges).toBe(true);
+    await h.controller.save();
+
+    expect(source.written).toEqual([Uint8Array.of(9, 8, 7), Uint8Array.of(6, 5, 4)]);
+    expect(h.controller.getSnapshot().hasUnsavedChanges).toBe(false);
+  });
+
+  it('saves validated bytes and retargets future Save writes only after Save as succeeds', async () => {
+    const h = createControllerHarness({
+      analyses: [
+        analysisFixture(),
+        analysisFixture('First edit'),
+        analysisFixture('Second edit'),
+        analysisFixture('Third edit'),
+      ],
+      applyResults: [
+        validatedResult(1, Uint8Array.of(2)),
+        validatedResult(2, Uint8Array.of(3)),
+        validatedResult(3, Uint8Array.of(4)),
+      ],
+    });
+    const original = memoryFileHandle('original.pdf');
+    const copy = memoryFileHandle('copy.pdf');
+    await h.controller.open(pdfFile('original.pdf', Uint8Array.of(1)), original.handle);
+    await prepareReplacement(h.controller, 'First edit');
+    await h.controller.applySelection();
+    await h.controller.save();
+
+    await prepareReplacement(h.controller, 'Second edit');
+    await h.controller.applySelection();
+    await h.controller.saveAs(copy.handle);
+    expect(h.controller.getSnapshot()).toMatchObject({
+      fileName: 'copy.pdf',
+      hasUnsavedChanges: false,
+    });
+
+    await prepareReplacement(h.controller, 'Third edit');
+    await h.controller.applySelection();
+    await h.controller.save();
+
+    expect(original.written).toEqual([Uint8Array.of(2)]);
+    expect(copy.written).toEqual([Uint8Array.of(3), Uint8Array.of(4)]);
+    expect(h.controller.getSnapshot().hasUnsavedChanges).toBe(false);
+  });
+
+  it('keeps edits dirty when another validated edit lands during a save', async () => {
+    const started = deferred<void>();
+    const close = deferred<void>();
+    const written: Uint8Array[] = [];
+    let pending = new Uint8Array();
+    const source = {
+      name: 'report.pdf',
+      getFile: vi.fn(),
+      requestPermission: vi.fn().mockResolvedValue('granted'),
+      createWritable: vi.fn().mockResolvedValue({
+        write: vi.fn().mockImplementation(async (bytes: ArrayBuffer) => {
+          pending = new Uint8Array(bytes.slice(0));
+          started.resolve();
+        }),
+        close: vi.fn().mockImplementation(async () => {
+          await close.promise;
+          written.push(pending.slice());
+        }),
+        abort: vi.fn(),
+      }),
+    } as unknown as WritablePdfHandle;
+    const h = createControllerHarness({
+      analyses: [analysisFixture(), analysisFixture('First edit'), analysisFixture('Second edit')],
+      applyResults: [
+        validatedResult(1, Uint8Array.of(2)),
+        validatedResult(2, Uint8Array.of(3)),
+      ],
+    });
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)), source);
+    await prepareReplacement(h.controller, 'First edit');
+    await h.controller.applySelection();
+
+    const saving = h.controller.save();
+    await started.promise;
+    await prepareReplacement(h.controller, 'Second edit');
+    await h.controller.applySelection();
+    close.resolve();
+    await saving;
+
+    expect(written).toEqual([Uint8Array.of(2)]);
+    expect(h.controller.getSnapshot()).toMatchObject({
+      hasUnsavedChanges: true,
+      downloadAvailable: true,
+    });
+  });
+
+  it('waits for an active Save to commit before resetting the editor baseline', async () => {
+    const started = deferred<void>();
+    const close = deferred<void>();
+    const written: Uint8Array[] = [];
+    let pending = new Uint8Array();
+    const source = {
+      name: 'report.pdf',
+      getFile: vi.fn(),
+      requestPermission: vi.fn().mockResolvedValue('granted'),
+      createWritable: vi.fn().mockImplementation(async () => ({
+        write: vi.fn().mockImplementation(async (bytes: ArrayBuffer) => {
+          pending = new Uint8Array(bytes.slice(0));
+          started.resolve();
+        }),
+        close: vi.fn().mockImplementation(async () => {
+          await close.promise;
+          written.push(pending.slice());
+        }),
+        abort: vi.fn(),
+      })),
+    } as unknown as WritablePdfHandle;
+    const h = createControllerHarness({
+      analyses: [analysisFixture(), analysisFixture('Edited'), analysisFixture()],
+      applyResults: [validatedResult(1, Uint8Array.of(2))],
+    });
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)), source);
+    await prepareReplacement(h.controller, 'Edited');
+    await h.controller.applySelection();
+
+    const saving = h.controller.save();
+    await started.promise;
+    const generationBeforeReset = h.controller.getSnapshot().generation;
+    const resetting = h.controller.reset();
+    expect(h.controller.getSnapshot().generation).toBe(generationBeforeReset);
+    expect(h.controller.getSnapshot().phase).toBe('ready');
+
+    close.resolve();
+    await Promise.all([saving, resetting]);
+
+    expect(written).toEqual([Uint8Array.of(2)]);
+    expect(h.engines[1]!.openInputs[0]).toEqual(Uint8Array.of(1));
+    expect(h.controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      hasEdits: false,
+      hasUnsavedChanges: true,
+    });
+    await h.controller.save();
+    expect(written).toEqual([Uint8Array.of(2), Uint8Array.of(1)]);
+    expect(h.controller.getSnapshot().hasUnsavedChanges).toBe(false);
+  });
+
+  it('saves reset-to-original bytes relative to the last confirmed save', async () => {
+    const h = createControllerHarness({
+      analyses: [analysisFixture(), analysisFixture('Edited'), analysisFixture()],
+      applyResults: [validatedResult(1, Uint8Array.of(2))],
+    });
+    const source = memoryFileHandle('report.pdf');
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)), source.handle);
+    await prepareReplacement(h.controller, 'Edited');
+    await h.controller.applySelection();
+    await h.controller.save();
+
+    await h.controller.reset();
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      hasEdits: false,
+      hasUnsavedChanges: true,
+    });
+    await h.controller.save();
+
+    expect(source.written).toEqual([Uint8Array.of(2), Uint8Array.of(1)]);
+    expect(h.controller.getSnapshot().hasUnsavedChanges).toBe(false);
+  });
+
+  it('retains the current file and dirty state after an overwrite fails', async () => {
+    const h = createControllerHarness({
+      analyses: [analysisFixture(), analysisFixture('Edited')],
+      applyResults: [validatedResult(1, Uint8Array.of(2))],
+    });
+    const source = memoryFileHandle('report.pdf');
+    const failingTarget = {
+      name: 'copy.pdf',
+      getFile: vi.fn(),
+      createWritable: vi.fn().mockRejectedValue(new Error('private path detail')),
+    } as unknown as WritablePdfHandle;
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)), source.handle);
+    await prepareReplacement(h.controller, 'Edited');
+    await h.controller.applySelection();
+
+    await h.controller.saveAs(failingTarget);
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      fileName: 'report.pdf',
+      hasUnsavedChanges: true,
+      status: expect.not.stringContaining('private path detail'),
+    });
+    await h.controller.save();
+    expect(source.written).toEqual([Uint8Array.of(2)]);
+    expect(h.controller.getSnapshot().fileName).toBe('report.pdf');
+  });
+
+  it('inserts an owned, intrinsically sized image and exports image-only edits repeatedly', async () => {
+    const h = createControllerHarness({
+      analyses: [analysisFixture()],
+      imageExportResults: [
+        { revision: 0, bytes: Uint8Array.of(9, 8, 7) },
+        { revision: 0, bytes: Uint8Array.of(9, 8, 7) },
+      ],
+    });
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 160,
+      height: 80,
+      close,
+    }));
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:stamp-preview');
+    const source = imageFile();
+
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1, 2, 3)));
+    h.controller.setZoom(2);
+    await insertImage(h.controller, source);
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      hasEdits: true,
+      downloadAvailable: true,
+      selectedImageId: expect.any(String),
+      images: [{
+        pageIndex: 0,
+        bounds: { x: 226, y: 356, width: 160, height: 80 },
+        format: 'png',
+        previewUrl: 'blob:stamp-preview',
+      }],
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+
+    const first = await downloadCurrent(h.controller);
+    const second = await downloadCurrent(h.controller);
+
+    expect(first).toEqual({ sourceFileName: 'report.pdf', bytes: Uint8Array.of(9, 8, 7) });
+    expect(second).toEqual(first);
+    expect(h.engines[0]!.positionedImageInputs).toHaveLength(2);
+    expect(h.engines[0]!.positionedImageInputs[0]).toEqual([{
+      pageIndex: 0,
+      bounds: { x: 226, y: 356, width: 160, height: 80 },
+      format: 'png',
+      bytes: new Uint8Array(await source.arrayBuffer()),
+    }]);
+    expect(h.engines[0]!.revision).toBe(0);
+  });
+
+  it('retains decoded intrinsic dimensions when releasing the ImageBitmap', async () => {
+    let width = 160;
+    let height = 80;
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      get width() { return width; },
+      get height() { return height; },
+      close() {
+        width = 0;
+        height = 0;
+      },
+    }));
+    const h = createControllerHarness({ analyses: [analysisFixture()] });
+
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    await insertImage(h.controller, imageFile());
+
+    expect(h.controller.getSnapshot().images[0]?.bounds).toEqual({
+      x: 226,
+      y: 356,
+      width: 160,
+      height: 80,
+    });
+  });
+
+  it('blocks untagged image insertion in tagged documents with an actionable message', async () => {
+    const h = createControllerHarness({
+      analyses: [analysisFixture()],
+      openResults: [{
+        documentId: 'fake-document',
+        fingerprint: 'fake',
+        revision: 0,
+        fonts: [],
+        imageInsertionAllowed: false,
+      }],
+    });
+    const decode = vi.fn();
+    vi.stubGlobal('createImageBitmap', decode);
+
+    await h.controller.open(pdfFile('tagged.pdf', Uint8Array.of(1)));
+    await insertImage(h.controller, imageFile());
+
+    expect(h.controller.getSnapshot().imageError)
+      .toContain('tagged or PDF/UA');
+    expect(decode).not.toHaveBeenCalled();
+    expect(h.controller.getSnapshot().images).toEqual([]);
+  });
+
+  it('recognises JPEG image bytes for the local preview and export payload', async () => {
+    const h = createControllerHarness({ analyses: [analysisFixture()] });
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 160,
+      height: 80,
+      close: vi.fn(),
+    }));
+
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    await insertImage(h.controller, jpegFile());
+
+    expect(h.controller.getSnapshot().images[0]).toMatchObject({
+      format: 'jpeg',
+      bounds: { width: 160, height: 80 },
+    });
+  });
+
+  it.each([
+    ['PNG', overLimitPngFile],
+    ['JPEG', overLimitJpegFile],
+  ] as const)('rejects an over-limit %s from its header before decoding', async (_format, file) => {
+    const h = createControllerHarness({ analyses: [analysisFixture()] });
+    const decode = vi.fn();
+    vi.stubGlobal('createImageBitmap', decode);
+
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    await insertImage(h.controller, file());
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      images: [],
+      imageError: expect.stringContaining('12-megapixel'),
+    });
+    expect(decode).not.toHaveBeenCalled();
+  });
+
+  it('keeps placements across page navigation and releases them on reset', async () => {
+    const h = createControllerHarness({
+      analyses: [analysisFixture(), analysisFixture('Page two'), analysisFixture()],
+      pageCount: 2,
+      imageExportResults: [{ revision: 0, bytes: Uint8Array.of(2) }],
+    });
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 160,
+      height: 80,
+      close: vi.fn(),
+    }));
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:stamp-preview');
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    await insertImage(h.controller, imageFile());
+    const imageId = h.controller.getSnapshot().selectedImageId;
+    await h.controller.setPage(1);
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      pageIndex: 1,
+      selectedImageId: null,
+      images: [{ id: imageId, pageIndex: 0 }],
+      downloadAvailable: true,
+    });
+    h.controller.clearSelection();
+    expect(h.controller.getSnapshot()).toMatchObject({
+      selectedImageId: null,
+      images: [{ id: imageId }],
+      downloadAvailable: true,
+    });
+    await h.controller.setPage(0);
+    await downloadCurrent(h.controller);
+    expect(h.engines[0]!.positionedImageInputs[0]![0]!.pageIndex).toBe(0);
+
+    await h.controller.reset();
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      pageIndex: 0,
+      images: [],
+      selectedImageId: null,
+      hasEdits: false,
+      downloadAvailable: false,
+    });
+    expect(revoke).toHaveBeenCalledWith('blob:stamp-preview');
+    expect(() => h.controller.download()).toThrow(/validated edit/);
+  });
+
+  it('releases preview URLs when opening another document and when disposing', async () => {
+    const h = createControllerHarness({
+      analyses: [analysisFixture('First'), analysisFixture('Second')],
+    });
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 160,
+      height: 80,
+      close: vi.fn(),
+    }));
+    const create = vi.spyOn(URL, 'createObjectURL')
+      .mockReturnValueOnce('blob:first-image')
+      .mockReturnValueOnce('blob:second-image');
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+
+    await h.controller.open(pdfFile('first.pdf', Uint8Array.of(1)));
+    await insertImage(h.controller, imageFile());
+    await h.controller.open(pdfFile('second.pdf', Uint8Array.of(2)));
+
+    expect(revoke).toHaveBeenCalledWith('blob:first-image');
+    expect(h.controller.getSnapshot()).toMatchObject({
+      fileName: 'second.pdf',
+      images: [],
+      selectedImageId: null,
+      downloadAvailable: false,
+    });
+    await insertImage(h.controller, imageFile('second.png'));
+    await h.controller.close();
+
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(revoke).toHaveBeenCalledWith('blob:second-image');
+    expect(h.controller.getSnapshot()).toMatchObject({
+      fileName: null,
+      images: [],
+      selectedImageId: null,
+    });
+  });
+
+  it.each(['page navigation', 'document replacement'] as const)(
+    'ignores a decode that resolves after %s',
+    async (change) => {
+      const decoding = deferred<ImageBitmap>();
+      const h = createControllerHarness({
+        analyses: [analysisFixture('Page one'), analysisFixture('Page two'), analysisFixture('New document')],
+        pageCount: 2,
+      });
+      const close = vi.fn();
+      const decode = vi.fn(() => decoding.promise);
+      vi.stubGlobal('createImageBitmap', decode);
+      const create = vi.spyOn(URL, 'createObjectURL');
+
+      await h.controller.open(pdfFile('first.pdf', Uint8Array.of(1)));
+      const insertion = insertImage(h.controller, imageFile());
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(1));
+      if (change === 'page navigation') {
+        await h.controller.setPage(1);
+      } else {
+        await h.controller.open(pdfFile('second.pdf', Uint8Array.of(2)));
+      }
+      decoding.resolve({ width: 160, height: 80, close } as ImageBitmap);
+      await insertion;
+
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(create).not.toHaveBeenCalled();
+      expect(h.controller.getSnapshot().images).toEqual([]);
+    },
+  );
+
+  it('retains the validated text-only download path when there are no images', async () => {
+    const h = createControllerHarness({
+      analyses: [analysisFixture(), analysisFixture('Edited')],
+      applyResults: [validatedResult(1, Uint8Array.of(4, 5, 6))],
+    });
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    await prepareReplacement(h.controller, 'Edited');
+    await h.controller.applySelection();
+
+    const asset = await downloadCurrent(h.controller);
+
+    expect(asset).toEqual({ sourceFileName: 'report.pdf', bytes: Uint8Array.of(4, 5, 6) });
+    expect(h.engines[0]!.positionedImageInputs).toHaveLength(0);
+    expect(h.controller.download()).toEqual(asset);
+  });
+
+  it('does not download an image export after its captured placements become stale', async () => {
+    const pending = deferred<{ revision: number; bytes: Uint8Array }>();
+    const h = createControllerHarness({
+      analyses: [analysisFixture()],
+      imageExportResults: [pending.promise],
+    });
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 160,
+      height: 80,
+      close: vi.fn(),
+    }));
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    await insertImage(h.controller, imageFile());
+    const imageId = h.controller.getSnapshot().selectedImageId!;
+
+    const exporting = downloadCurrent(h.controller);
+    expect(h.controller.getSnapshot().isDownloading).toBe(true);
+    h.controller.setImageBounds(imageId, { x: 200, y: 200, width: 120, height: 60 });
+    pending.resolve({ revision: 0, bytes: Uint8Array.of(7, 7, 7) });
+
+    await expect(exporting).resolves.toBeNull();
+    expect(h.controller.getSnapshot().isDownloading).toBe(false);
+  });
+
+  it('allows retry after positioned-image export fails', async () => {
+    const h = createControllerHarness({
+      analyses: [analysisFixture()],
+      imageExportResults: [
+        new Error('engine export failed'),
+        { revision: 0, bytes: Uint8Array.of(6, 5, 4) },
+      ],
+    });
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({
+      width: 160,
+      height: 80,
+      close: vi.fn(),
+    }));
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    await insertImage(h.controller, imageFile());
+
+    await expect(downloadCurrent(h.controller)).resolves.toBeNull();
+    expect(h.controller.getSnapshot()).toMatchObject({
+      isDownloading: false,
+      imageError: expect.stringContaining('try again'),
+      downloadAvailable: true,
+    });
+    await expect(downloadCurrent(h.controller)).resolves.toEqual({
+      sourceFileName: 'report.pdf',
+      bytes: Uint8Array.of(6, 5, 4),
+    });
+  });
+
+  it('rejects corrupt images with a visible error before creating a preview', async () => {
+    const h = createControllerHarness({ analyses: [analysisFixture()] });
+    const decode = vi.fn();
+    vi.stubGlobal('createImageBitmap', decode);
+    const create = vi.spyOn(URL, 'createObjectURL');
+
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    await insertImage(h.controller, new File([Uint8Array.of(1, 2, 3)], 'broken.png', {
+      type: 'image/png',
+    }));
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      images: [],
+      downloadAvailable: false,
+      imageError: expect.stringContaining('readable PNG or JPEG'),
+    });
+    expect(decode).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it('opens independent engine/display copies and analyses page zero', async () => {
     const h = createControllerHarness({ analyses: [analysisFixture()] });
     const source = Uint8Array.of(1, 2, 3);
@@ -294,6 +1043,189 @@ describe('EditorController', () => {
       phase: 'ready',
       replacement: 'AXC',
       richEditor: { preview: null },
+    });
+  });
+
+  it('clears a selection during a pending preview without changing validated download bytes', async () => {
+    const pending = deferred<ReturnType<typeof richPreviewResult>>();
+    const h = createControllerHarness({
+      analyses: [analysisFixture(), textLineAnalysisFixture('ABC')],
+      applyResults: [validatedResult(1, Uint8Array.of(9, 8, 7))],
+      richPreviewResults: [pending.promise],
+    });
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    await prepareReplacement(h.controller, 'Applied');
+    await h.controller.applySelection();
+    const validatedBytes = h.controller.download().bytes;
+
+    h.controller.selectTextRange('line-1', 0, 2, 'group-1');
+    h.controller.replaceRichText({ start: 1, end: 2 }, 'X');
+    const request = h.controller.previewSelection();
+    expect(h.controller.getSnapshot().phase).toBe('previewing');
+
+    h.controller.clearSelection();
+    expect(h.controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      selection: null,
+      replacement: '',
+      preview: null,
+      richEditor: null,
+      hasEdits: true,
+      downloadAvailable: true,
+    });
+
+    pending.resolve(richPreviewResult('AXC'));
+    await request;
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      selection: null,
+      replacement: '',
+      preview: null,
+      richEditor: null,
+      hasEdits: true,
+      downloadAvailable: true,
+    });
+    expect(h.controller.download().bytes).toEqual(validatedBytes);
+    expect(h.controller.download().bytes).toEqual(Uint8Array.of(9, 8, 7));
+    expect(h.engines[0]!.richApplyInputs).toHaveLength(0);
+  });
+
+  it('keeps an in-flight Apply selection until its validated result is committed', async () => {
+    const pending = deferred<ReturnType<typeof validatedResult>>();
+    const h = createControllerHarness({
+      analyses: [textLineAnalysisFixture('ABC'), textLineAnalysisFixture('ABC')],
+      applyResults: [pending.promise],
+    });
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    h.controller.selectTextRange('line-1', 0, 2, 'group-1');
+    h.controller.setRichSubstitutionConsent('font:bundled-example', true);
+    await h.controller.previewSelection();
+
+    const applying = h.controller.applySelection();
+    expect(h.controller.getSnapshot().phase).toBe('applying');
+    h.controller.clearSelection();
+    expect(h.controller.getSnapshot()).toMatchObject({
+      phase: 'applying',
+      selection: { kind: 'text' },
+      downloadAvailable: false,
+    });
+
+    pending.resolve(validatedResult(1, Uint8Array.of(4, 5, 6)));
+    await applying;
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      selection: null,
+      hasEdits: true,
+      downloadAvailable: true,
+    });
+    expect(h.controller.download().bytes).toEqual(Uint8Array.of(4, 5, 6));
+  });
+
+  it('keeps a text selection intact when image decoding finishes during Apply', async () => {
+    const pendingApply = deferred<ReturnType<typeof validatedResult>>();
+    const pendingDecode = deferred<ImageBitmap>();
+    const h = createControllerHarness({
+      analyses: [analysisFixture(), analysisFixture('Applied')],
+      applyResults: [pendingApply.promise],
+    });
+    const close = vi.fn();
+    vi.stubGlobal('createImageBitmap', vi.fn(() => pendingDecode.promise));
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:stamp-preview');
+
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    await prepareReplacement(h.controller, 'Applied');
+    const applying = h.controller.applySelection();
+    const inserting = insertImage(h.controller, imageFile());
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(1));
+
+    pendingDecode.resolve({ width: 160, height: 80, close } as ImageBitmap);
+    await vi.waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(1));
+    expect(h.controller.getSnapshot()).toMatchObject({
+      phase: 'applying',
+      selection: { kind: 'span' },
+    });
+
+    pendingApply.resolve(validatedResult(1, Uint8Array.of(4, 5, 6)));
+    await Promise.all([applying, inserting]);
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      selection: null,
+      hasEdits: true,
+      downloadAvailable: true,
+      selectedImageId: expect.any(String),
+      images: [{ bounds: { width: 160, height: 80 } }],
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a rich-text selection intact when image decoding finishes during Apply', async () => {
+    const pendingApply = deferred<ReturnType<typeof validatedResult>>();
+    const pendingDecode = deferred<ImageBitmap>();
+    const h = createControllerHarness({
+      analyses: [textLineAnalysisFixture('ABC'), textLineAnalysisFixture('ABC')],
+      applyResults: [pendingApply.promise],
+    });
+    vi.stubGlobal('createImageBitmap', vi.fn(() => pendingDecode.promise));
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:rich-apply-image');
+
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    h.controller.selectTextRange('line-1', 0, 2, 'group-1');
+    h.controller.setRichSubstitutionConsent('font:bundled-example', true);
+    await h.controller.previewSelection();
+    const applying = h.controller.applySelection();
+    const activeSelection = h.controller.getSnapshot().selection;
+    expect(activeSelection?.kind).toBe('text');
+    const inserting = insertImage(h.controller, imageFile());
+    h.controller.selectTextRange('line-1', 1, 2, null);
+    h.controller.selectSpan('span-1');
+    expect(h.controller.getSnapshot().selection).toBe(activeSelection);
+    await vi.waitFor(() => expect(createImageBitmap).toHaveBeenCalledTimes(1));
+
+    pendingDecode.resolve({ width: 160, height: 80, close: vi.fn() } as ImageBitmap);
+    await vi.waitFor(() => expect(URL.createObjectURL).toHaveBeenCalledTimes(1));
+    expect(h.controller.getSnapshot()).toMatchObject({
+      phase: 'applying',
+      selection: { kind: 'text' },
+    });
+
+    pendingApply.resolve(validatedResult(1, Uint8Array.of(6, 5, 4)));
+    await Promise.all([applying, inserting]);
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      selection: null,
+      selectedImageId: expect.any(String),
+      images: [{ bounds: { width: 160, height: 80 } }],
+      hasEdits: true,
+      downloadAvailable: true,
+    });
+    expect(h.engines[0]!.richApplyInputs).toHaveLength(1);
+  });
+
+  it('ignores a stale replacement-preview rejection after clearing its selection', async () => {
+    const h = createControllerHarness({ analyses: [analysisFixture()] });
+    await h.controller.open(pdfFile('report.pdf', Uint8Array.of(1)));
+    h.controller.selectSpan('span-1');
+    const pending = deferred<ReplacementPreviewResult>();
+    vi.spyOn(h.engines[0]!, 'previewReplacement').mockReturnValue(pending.promise);
+    h.controller.setReplacement('Pending');
+
+    const request = h.controller.previewSelection();
+    expect(h.controller.getSnapshot().phase).toBe('previewing');
+    h.controller.clearSelection();
+    pending.reject(new Error('stale preview failure'));
+    await request;
+
+    expect(h.controller.getSnapshot()).toMatchObject({
+      phase: 'ready',
+      selection: null,
+      replacement: '',
+      preview: null,
+      error: null,
+      status: 'Ready',
     });
   });
 

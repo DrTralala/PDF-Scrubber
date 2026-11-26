@@ -23,21 +23,27 @@ async function selectEditableText(page: Page, name: RegExp): Promise<void> {
   await expect(page.getByLabel('Edit selected text')).toBeVisible();
 }
 
-test('Fit line clamps an unresolvable overflow to the safe maximum', async ({ page }) => {
+test('Auto reports an unresolvable overflow truthfully while manual width remains available', async ({ page }) => {
   await openFixture(page, '01-simple-tj.pdf');
   await selectEditableText(page, /Target 01 — Editable/);
   await page.getByLabel('Edit selected text').fill(
     'This deliberately long replacement cannot fit before the protected page edge.',
   );
 
-  const fit = page.getByRole('button', { name: 'Fit line' });
-  await expect(fit).toBeVisible();
-  await fit.click();
+  const auto = page.getByRole('checkbox', { name: 'Auto' });
+  await expect(auto).toBeChecked();
+  const fitStatus = page.locator('.fit-status');
+  await expect(fitStatus).toContainText('pt short');
+
+  await auto.uncheck();
   const slider = page.getByLabel('Allowed width');
   const maximum = Number(await slider.getAttribute('max'));
-  await expect.poll(async () => Number(await slider.inputValue())).toBe(maximum);
+  await slider.focus();
+  await slider.press('End');
+  await expect(slider).toHaveValue(String(maximum));
+  await expect(fitStatus).toContainText('pt short');
   await expect(page.getByText(/This text overflows the allowed region/)).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Apply replacement' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeDisabled();
 });
 
 test('Text Colour stays unobscured at desktop and narrow widths', async ({ page }) => {

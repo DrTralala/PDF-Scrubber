@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { buildTextSelection } from '@pdf-editor/pdf-engine';
 import userEvent from '@testing-library/user-event';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 
 import {
   analysisFixture,
@@ -10,6 +10,34 @@ import {
   textLineAnalysisFixture,
 } from '../test/fakes';
 import { CapabilityOverlay } from './capability-overlay';
+
+function renderSelectedOverlay(tool: 'select' | 'pan' = 'select') {
+  const analysis = textLineAnalysisFixture('ABC');
+  const line = analysis.textLayout.lines[0]!;
+  const selection = {
+    kind: 'text' as const,
+    groupKey: 'group-1',
+    textSelection: buildTextSelection(line, 0, 2),
+  };
+  const controller = readyController({ analysis });
+  const clearSelection = vi.fn();
+  Object.assign(controller, { clearSelection });
+  const { container } = render(
+    <CapabilityOverlay
+      controller={controller}
+      analysis={analysis}
+      selection={selection}
+      viewport={{ width: 612, height: 792 }}
+      showOverlays
+      tool={tool}
+    />,
+  );
+  const hitLayer = container.querySelector<HTMLElement>('.text-selection-hit-layer')!;
+  Object.defineProperty(hitLayer, 'getBoundingClientRect', {
+    value: () => ({ left: 0, top: 0, width: 612, height: 792 }),
+  });
+  return { clearSelection, controller, hitLayer };
+}
 
 it('uses one roving tab stop and selects with the keyboard', async () => {
   const analysis = analysisFixture([
@@ -26,6 +54,8 @@ it('uses one roving tab stop and selects with the keyboard', async () => {
     },
   ]);
   const controller = readyController({ analysis });
+  const clearSelection = vi.fn();
+  Object.assign(controller, { clearSelection });
 
   render(
     <CapabilityOverlay
@@ -52,11 +82,114 @@ it('uses one roving tab stop and selects with the keyboard', async () => {
     0,
     'group-2',
   );
+  expect(clearSelection).not.toHaveBeenCalled();
+});
+
+it('clears an active text selection on a primary blank-page click', () => {
+  const { clearSelection, hitLayer } = renderSelectedOverlay();
+
+  fireEvent.pointerDown(hitLayer, {
+    button: 0,
+    pointerId: 11,
+    clientX: 300,
+    clientY: 400,
+  });
+  fireEvent.pointerUp(hitLayer, {
+    button: 0,
+    pointerId: 11,
+    clientX: 300,
+    clientY: 400,
+  });
+
+  expect(clearSelection).toHaveBeenCalledTimes(1);
+});
+
+it('does not clear a selection when a blank gesture moves beyond the click threshold', () => {
+  const { clearSelection, hitLayer } = renderSelectedOverlay();
+
+  fireEvent.pointerDown(hitLayer, {
+    button: 0,
+    pointerId: 12,
+    clientX: 300,
+    clientY: 400,
+  });
+  fireEvent.pointerMove(hitLayer, {
+    pointerId: 12,
+    clientX: 306,
+    clientY: 400,
+  });
+  fireEvent.pointerUp(hitLayer, {
+    button: 0,
+    pointerId: 12,
+    clientX: 306,
+    clientY: 400,
+  });
+
+  expect(clearSelection).not.toHaveBeenCalled();
+});
+
+it('requires the same pointer to clear a selection', () => {
+  const { clearSelection, hitLayer } = renderSelectedOverlay();
+
+  fireEvent.pointerDown(hitLayer, {
+    button: 0,
+    pointerId: 13,
+    clientX: 300,
+    clientY: 400,
+  });
+  fireEvent.pointerUp(hitLayer, {
+    button: 0,
+    pointerId: 14,
+    clientX: 300,
+    clientY: 400,
+  });
+
+  expect(clearSelection).not.toHaveBeenCalled();
+});
+
+it('does not clear a selection when a blank pointer is released over text', () => {
+  const { clearSelection, hitLayer } = renderSelectedOverlay();
+
+  fireEvent.pointerDown(hitLayer, {
+    button: 0,
+    pointerId: 16,
+    clientX: 9.5,
+    clientY: 766,
+  });
+  fireEvent.pointerUp(hitLayer, {
+    button: 0,
+    pointerId: 16,
+    clientX: 10.5,
+    clientY: 766,
+  });
+
+  expect(clearSelection).not.toHaveBeenCalled();
+});
+
+it('does not clear a selection for a non-primary blank-page click', () => {
+  const { clearSelection, hitLayer } = renderSelectedOverlay();
+
+  fireEvent.pointerDown(hitLayer, {
+    button: 2,
+    pointerId: 15,
+    clientX: 300,
+    clientY: 400,
+  });
+  fireEvent.pointerUp(hitLayer, {
+    button: 2,
+    pointerId: 15,
+    clientX: 300,
+    clientY: 400,
+  });
+
+  expect(clearSelection).not.toHaveBeenCalled();
 });
 
 it('uses one group target while drag-selecting source glyphs on its line', () => {
   const analysis = textLineAnalysisFixture('ABC');
   const controller = readyController({ analysis });
+  const clearSelection = vi.fn();
+  Object.assign(controller, { clearSelection });
   const { container } = render(
     <CapabilityOverlay
       controller={controller}
@@ -98,35 +231,27 @@ it('uses one group target while drag-selecting source glyphs on its line', () =>
     2,
     null,
   );
+  expect(clearSelection).not.toHaveBeenCalled();
 });
 
-it('does not begin text selection while the pan tool is active', () => {
-  const analysis = textLineAnalysisFixture('ABC');
-  const controller = readyController({ analysis });
-  const { container } = render(
-    <CapabilityOverlay
-      controller={controller}
-      analysis={analysis}
-      selection={null}
-      viewport={{ width: 612, height: 792 }}
-      showOverlays
-      tool="pan"
-    />,
-  );
-  const hitLayer = container.querySelector<HTMLElement>('.text-selection-hit-layer');
-  fireEvent.pointerDown(hitLayer!, {
+it('does not select or clear on a blank-page click while the pan tool is active', () => {
+  const { clearSelection, controller, hitLayer } = renderSelectedOverlay('pan');
+
+  fireEvent.pointerDown(hitLayer, {
     button: 0,
     pointerId: 8,
-    clientX: 15,
-    clientY: 766,
+    clientX: 300,
+    clientY: 400,
   });
-  fireEvent.pointerUp(hitLayer!, {
+  fireEvent.pointerUp(hitLayer, {
+    button: 0,
     pointerId: 8,
-    clientX: 15,
-    clientY: 766,
+    clientX: 300,
+    clientY: 400,
   });
 
   expect(controller.selectTextRange).not.toHaveBeenCalled();
+  expect(clearSelection).not.toHaveBeenCalled();
 });
 
 it('keeps a drag on its starting visual line', () => {
@@ -203,6 +328,8 @@ it('keeps a drag on its starting visual line', () => {
 it('discards a cancelled pointer selection', () => {
   const analysis = textLineAnalysisFixture('ABC');
   const controller = readyController({ analysis });
+  const clearSelection = vi.fn();
+  Object.assign(controller, { clearSelection });
   const { container } = render(
     <CapabilityOverlay
       controller={controller}
@@ -229,8 +356,20 @@ it('discards a cancelled pointer selection', () => {
     clientX: 15,
     clientY: 766,
   });
+  fireEvent.pointerDown(hitLayer, {
+    button: 0,
+    pointerId: 17,
+    clientX: 300,
+    clientY: 400,
+  });
+  fireEvent.pointerCancel(hitLayer, {
+    pointerId: 17,
+    clientX: 300,
+    clientY: 400,
+  });
 
   expect(controller.selectTextRange).not.toHaveBeenCalled();
+  expect(clearSelection).not.toHaveBeenCalled();
 });
 
 it('shows the authorised line region and shaped rich preview in page space', () => {

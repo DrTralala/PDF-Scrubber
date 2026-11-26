@@ -35,6 +35,14 @@ type DragOrigin = Readonly<{
   focusGlyphIndex: number;
   moved: boolean;
 }>;
+type BlankPointerOrigin = Readonly<{
+  pointerId: number;
+  button: number;
+  start: Point;
+  moved: boolean;
+}>;
+
+const CLICK_MOVE_THRESHOLD = 4;
 
 function capabilityLabel(capability: Capability): string {
   switch (capability.kind) {
@@ -158,6 +166,7 @@ export function CapabilityOverlay({
   const [activeIndex, setActiveIndex] = useState(selectedIndex >= 0 ? selectedIndex : 0);
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const dragOrigin = useRef<DragOrigin | null>(null);
+  const blankOrigin = useRef<BlankPointerOrigin | null>(null);
 
   useEffect(() => {
     if (selectedIndex >= 0) setActiveIndex(selectedIndex);
@@ -195,13 +204,26 @@ export function CapabilityOverlay({
 
   const startSelection = (event: PointerEvent<HTMLDivElement>): void => {
     if (tool !== 'select' || event.button !== 0) return;
+    if (dragOrigin.current !== null || blankOrigin.current !== null) return;
+    const point = eventPoint(event);
     const hit = exactGlyphHit(
       analysis.textLayout.lines,
       analysis,
       viewport,
-      eventPoint(event),
+      point,
     );
-    if (hit === null) return;
+    if (hit === null) {
+      blankOrigin.current = Object.freeze({
+        pointerId: event.pointerId,
+        button: event.button,
+        start: point,
+        moved: false,
+      });
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+      return;
+    }
+    blankOrigin.current = null;
     dragOrigin.current = Object.freeze({
       pointerId: event.pointerId,
       lineKey: hit.line.key,
@@ -214,6 +236,19 @@ export function CapabilityOverlay({
   };
 
   const moveSelection = (event: PointerEvent<HTMLDivElement>): void => {
+    const blank = blankOrigin.current;
+    if (blank !== null) {
+      if (blank.pointerId !== event.pointerId) return;
+      const point = eventPoint(event);
+      if (
+        !blank.moved
+        && Math.hypot(point.x - blank.start.x, point.y - blank.start.y)
+          >= CLICK_MOVE_THRESHOLD
+      ) {
+        blankOrigin.current = Object.freeze({ ...blank, moved: true });
+      }
+      return;
+    }
     const origin = dragOrigin.current;
     if (origin === null || origin.pointerId !== event.pointerId) return;
     const line = analysis.textLayout.lines.find((candidate) => candidate.key === origin.lineKey);
@@ -225,6 +260,30 @@ export function CapabilityOverlay({
   };
 
   const stopSelection = (event: PointerEvent<HTMLDivElement>): void => {
+    const blank = blankOrigin.current;
+    if (blank !== null) {
+      if (blank.pointerId !== event.pointerId) return;
+      blankOrigin.current = null;
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+      const point = eventPoint(event);
+      const moved = blank.moved || Math.hypot(
+        point.x - blank.start.x,
+        point.y - blank.start.y,
+      ) >= CLICK_MOVE_THRESHOLD;
+      if (
+        blank.button !== 0
+        || event.button !== blank.button
+        || tool !== 'select'
+        || moved
+        || point.x < 0
+        || point.x > viewport.width
+        || point.y < 0
+        || point.y > viewport.height
+        || exactGlyphHit(analysis.textLayout.lines, analysis, viewport, point) !== null
+      ) return;
+      controller.clearSelection();
+      return;
+    }
     const origin = dragOrigin.current;
     if (origin === null || origin.pointerId !== event.pointerId) return;
     dragOrigin.current = null;
@@ -252,6 +311,11 @@ export function CapabilityOverlay({
   };
 
   const cancelSelection = (event: PointerEvent<HTMLDivElement>): void => {
+    if (blankOrigin.current?.pointerId === event.pointerId) {
+      blankOrigin.current = null;
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+      return;
+    }
     if (dragOrigin.current?.pointerId !== event.pointerId) return;
     dragOrigin.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);

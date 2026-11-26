@@ -25,3 +25,28 @@ export async function expandAllowedWidth(page: Page): Promise<void> {
     element.dispatchEvent(new Event('change', { bubbles: true }));
   }, maximum);
 }
+
+export async function useDownloadOnlyBrowser(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'showOpenFilePicker', {
+      configurable: true,
+      value: undefined,
+    });
+    Object.defineProperty(window, 'showSaveFilePicker', {
+      configurable: true,
+      value: undefined,
+    });
+  });
+}
+
+export async function reloadAfterDiscardingUnsavedChanges(page: Page): Promise<void> {
+  const dialogPromise = page.waitForEvent('dialog');
+  const reload = page.reload();
+  const dialog = await dialogPromise;
+  if (dialog.type() !== 'beforeunload') {
+    await dialog.dismiss();
+    throw new Error(`Expected a beforeunload confirmation, received ${dialog.type()}`);
+  }
+  await dialog.accept();
+  await reload;
+}

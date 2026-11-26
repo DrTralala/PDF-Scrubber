@@ -22,6 +22,7 @@ const execFileAsync = promisify(execFile);
 export type AppSession = {
   applicationRoot: string;
   downloadDirectory: string;
+  runtimeProcessId: number;
   debugPort: number;
   child: ChildProcess;
   browser: Browser;
@@ -236,9 +237,14 @@ export async function openPortableSession(
     const context = browser.contexts()[0];
     if (context === undefined) throw new Error('Portable app did not expose a browser context');
     page = await waitForEditorPage(context);
+    const runtimeProcessId = assertManagedPaths(
+      await readPortableDiagnostics({ downloadDirectory }),
+      applicationRoot,
+    );
     const session: AppSession = {
       applicationRoot,
       downloadDirectory,
+      runtimeProcessId,
       debugPort,
       child,
       browser,
@@ -248,7 +254,6 @@ export async function openPortableSession(
       ...(stderrCapture === undefined ? {} : { stderrCapture }),
       closed: false,
     };
-    assertManagedPaths(await readElectronDiagnostics(session), applicationRoot);
     return session;
   } catch (error) {
     if (page !== undefined && !page.isClosed()) await page.close().catch(() => undefined);
@@ -625,6 +630,12 @@ async function waitForChildClose(child: ChildProcess, timeoutMs: number): Promis
 }
 
 async function readElectronDiagnostics(session: AppSession): Promise<Record<string, unknown>[]> {
+  return readPortableDiagnostics(session);
+}
+
+export async function readPortableDiagnostics(
+  session: Readonly<{ downloadDirectory: string }>,
+): Promise<Record<string, unknown>[]> {
   let diagnosticText: string;
   try {
     diagnosticText = await readFile(join(session.downloadDirectory, 'desktop-diagnostics.jsonl'), 'utf8');
@@ -650,7 +661,7 @@ function isMissingFileError(error: unknown): boolean {
   return error !== null && typeof error === 'object' && 'code' in error && error.code === 'ENOENT';
 }
 
-function assertManagedPaths(records: readonly Record<string, unknown>[], applicationRoot: string): void {
+function assertManagedPaths(records: readonly Record<string, unknown>[], applicationRoot: string): number {
   const record = records.find(({ event }) => event === 'portable-managed-paths');
   expect(record, 'portable managed-paths CI diagnostic').toBeDefined();
   const config = join(applicationRoot, 'config');
@@ -668,12 +679,16 @@ function assertManagedPaths(records: readonly Record<string, unknown>[], applica
     );
   }
   expect(record?.processId).toEqual(expect.any(Number));
+  if (typeof record?.processId !== 'number' || !Number.isSafeInteger(record.processId)) {
+    throw new Error('Portable managed-paths diagnostic is missing a valid Electron process identity.');
+  }
   const temporaryEnvironment = record?.tempEnvironment as Record<string, unknown> | undefined;
   for (const name of ['TMP', 'TEMP', 'TMPDIR']) {
     expect(normaliseWindowsPath(temporaryEnvironment?.[name]), `${name} points to portable temp`).toBe(
       normaliseWindowsPath(join(config, 'temp')),
     );
   }
+  return record.processId;
 }
 
 function normaliseWindowsPath(value: unknown): string {

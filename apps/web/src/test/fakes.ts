@@ -4,9 +4,11 @@ import type {
   AnalysedTextGroup,
   AnalysedTextLine,
   Capability,
+  CanonicalBounds,
   DocumentEditingFont,
   FontDescriptor,
   FontSourceKind,
+  PositionedImage,
 } from '@pdf-editor/pdf-engine';
 import { buildTextSelection, DEFAULT_TEXT_DECORATIONS } from '@pdf-editor/pdf-engine';
 import type {
@@ -354,6 +356,9 @@ type FontInventoryReply =
   | readonly DocumentEditingFont[]
   | Error
   | Promise<readonly DocumentEditingFont[]>;
+type ImageExportReply = Readonly<{ revision: number; bytes: Uint8Array }>
+  | Error
+  | Promise<Readonly<{ revision: number; bytes: Uint8Array }>>;
 
 export function richPreviewResult(
   replacement = 'ABC',
@@ -394,6 +399,7 @@ export class FakeEngineClient {
     payload: RichReplacementPayload;
     preconditions: RichReplacementPreconditions;
   }>> = [];
+  readonly positionedImageInputs: PositionedImage[][] = [];
   fontInventoryCalls = 0;
   terminated = false;
   revision: number | null = null;
@@ -406,6 +412,7 @@ export class FakeEngineClient {
     private readonly richPreviewResults: RichPreviewReply[],
     private readonly fontRegistrationResults: FontRegistrationReply[],
     private readonly fontInventoryResults: FontInventoryReply[],
+    private readonly imageExportResults: ImageExportReply[],
   ) {}
 
   async open(bytes: Uint8Array): Promise<OpenDocumentResult> {
@@ -423,6 +430,7 @@ export class FakeEngineClient {
       fingerprint: 'fake',
       revision: 0,
       fonts: [fakeFontDescriptor()],
+      imageInsertionAllowed: true,
     };
   }
 
@@ -556,6 +564,21 @@ export class FakeEngineClient {
     return result;
   }
 
+  async exportPositionedImages(
+    images: readonly PositionedImage[],
+  ): Promise<Readonly<{ revision: number; bytes: Uint8Array }>> {
+    this.positionedImageInputs.push(images.map((image) => Object.freeze({
+      ...image,
+      bounds: Object.freeze({ ...image.bounds }),
+      bytes: image.bytes.slice(),
+    })));
+    const reply = this.imageExportResults.shift();
+    if (reply instanceof Error) throw reply;
+    if (reply === undefined) throw new Error('No scripted positioned-image export result');
+    const result = await reply;
+    return Object.freeze({ revision: result.revision, bytes: result.bytes.slice() });
+  }
+
   async close(): Promise<void> {
     this.revision = null;
   }
@@ -567,8 +590,9 @@ export class FakeEngineClient {
 }
 
 export class FakeDisplayDocument {
-  readonly pageCount = 1;
   destroyed = false;
+
+  constructor(readonly pageCount = 1) {}
 
   async getPage(_pageIndex: number): Promise<PDFPageProxy> {
     return {} as PDFPageProxy;
@@ -593,6 +617,8 @@ export function createControllerHarness(options: Readonly<{
   richPreviewResults?: RichPreviewReply[];
   fontRegistrationResults?: FontRegistrationReply[];
   fontInventoryResults?: FontInventoryReply[];
+  imageExportResults?: ImageExportReply[];
+  pageCount?: number;
 }> = {}): ControllerHarness {
   const analyses = [...(options.analyses ?? [])];
   const applyResults = [...(options.applyResults ?? [])];
@@ -600,6 +626,7 @@ export function createControllerHarness(options: Readonly<{
   const richPreviewResults = [...(options.richPreviewResults ?? [])];
   const fontRegistrationResults = [...(options.fontRegistrationResults ?? [])];
   const fontInventoryResults = [...(options.fontInventoryResults ?? [])];
+  const imageExportResults = [...(options.imageExportResults ?? [])];
   const engines: FakeEngineClient[] = [];
   const displayInputs: Uint8Array[] = [];
   const controller = new EditorController({
@@ -611,13 +638,14 @@ export function createControllerHarness(options: Readonly<{
         richPreviewResults,
         fontRegistrationResults,
         fontInventoryResults,
+        imageExportResults,
       );
       engines.push(engine);
       return engine as unknown as ProductEngineClient;
     },
     openDisplay: async (bytes) => {
       displayInputs.push(bytes.slice());
-      return new FakeDisplayDocument() as unknown as PdfDisplayDocument;
+      return new FakeDisplayDocument(options.pageCount ?? 1) as unknown as PdfDisplayDocument;
     },
   });
 
@@ -643,6 +671,10 @@ export type TestEditorController = EditorController & Readonly<{
   publish(patch: Partial<EditorSnapshot>): void;
   selectTextRange: ReturnType<typeof vi.fn>;
   registerAndApplyFont: ReturnType<typeof vi.fn>;
+  selectImage: ReturnType<typeof vi.fn>;
+  moveImage: ReturnType<typeof vi.fn>;
+  setImageBounds: ReturnType<typeof vi.fn>;
+  clearSelection: ReturnType<typeof vi.fn>;
 }>;
 
 export function readyController(
@@ -667,7 +699,14 @@ export function readyController(
     acceptSubstitution: false,
     preview: null,
     richEditor: null,
+    images: [],
+    selectedImageId: null,
+    imageError: null,
+    isDownloading: false,
+    isSaving: false,
     hasEdits: false,
+    hasUnsavedChanges: false,
+    hasWritableFileHandle: false,
     downloadAvailable: false,
     displayVersion: 0,
     status: 'Ready',
@@ -692,10 +731,15 @@ export function readyController(
     setZoom: vi.fn(),
     setTool: vi.fn(),
     setShowOverlays: vi.fn(),
+    canInsertImages: vi.fn(() => true),
     registerFont: vi.fn(),
     registerAndApplyFont: vi.fn(),
     listSessionFonts: vi.fn(() => []),
     selectSpan: vi.fn(),
+    selectImage: vi.fn(),
+    moveImage: vi.fn(),
+    setImageBounds: vi.fn(),
+    clearSelection: vi.fn(),
     selectTextRange: vi.fn(),
     setReplacement: vi.fn(),
     setAcceptSubstitution: vi.fn(),
@@ -706,6 +750,16 @@ export function readyController(
     previewSelection: vi.fn().mockResolvedValue(undefined),
     applySelection: vi.fn().mockResolvedValue(undefined),
     reset: vi.fn().mockResolvedValue(undefined),
+    save: vi.fn().mockResolvedValue(undefined),
+    saveAs: vi.fn().mockResolvedValue(undefined),
+    downloadCurrent: vi.fn().mockResolvedValue({
+      sourceFileName: snapshot.fileName ?? 'document.pdf',
+      bytes: Uint8Array.of(1),
+    }),
+    downloadCurrentDocument: vi.fn().mockResolvedValue({
+      sourceFileName: snapshot.fileName ?? 'document.pdf',
+      bytes: Uint8Array.of(1),
+    }),
     download: vi.fn(() => ({
       sourceFileName: snapshot.fileName ?? 'document.pdf',
       bytes: Uint8Array.of(1),

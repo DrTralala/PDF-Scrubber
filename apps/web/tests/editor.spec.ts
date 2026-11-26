@@ -10,6 +10,8 @@ import {
   acceptRichFontSubstitutions,
   activateByKeyboard,
   expandAllowedWidth,
+  reloadAfterDiscardingUnsavedChanges,
+  useDownloadOnlyBrowser,
 } from './editor-interactions';
 
 function fixture(name: string): string {
@@ -73,6 +75,7 @@ async function sellerAppendFixture(): Promise<Buffer> {
 test('opens, applies two validated edits, downloads, and resets', async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const remoteRequests = await installNoNetworkGuard(page);
+  await useDownloadOnlyBrowser(page);
   await page.goto('/');
   await page.getByLabel('Open PDF').setInputFiles(fixture('01-simple-tj.pdf'));
   await expect(page.getByTestId('pdf-canvas')).toBeVisible();
@@ -82,7 +85,7 @@ test('opens, applies two validated edits, downloads, and resets', async ({ page 
   );
 
   const replacement = page.getByLabel('Edit selected text');
-  const apply = page.getByRole('button', { name: 'Apply replacement' });
+  const apply = page.getByRole('button', { name: 'Apply', exact: true });
   await replacement.fill('Edited 01');
   await expect(apply).toBeDisabled();
   await expandAllowedWidth(page);
@@ -107,7 +110,7 @@ test('opens, applies two validated edits, downloads, and resets', async ({ page 
   await expect(page.getByRole('button', { name: /Edited 02 — Editable/ })).toBeVisible();
 
   const downloadEvent = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download copy' }).click();
+  await page.getByRole('button', { name: 'Save as...', exact: true }).click();
   const download = await downloadEvent;
   expect(download.suggestedFilename()).toBe('01-simple-tj-edited.pdf');
   const downloadedPath = await download.path();
@@ -117,7 +120,7 @@ test('opens, applies two validated edits, downloads, and resets', async ({ page 
   await page.getByRole('button', { name: 'Reset' }).click();
   await page.getByRole('button', { name: 'Reset to original' }).click();
   await expect(page.getByRole('button', { name: /Target 01 — Editable/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Download copy' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   expect(remoteRequests).toEqual([]);
 });
 
@@ -155,8 +158,8 @@ test('edits inferred wkhtmltopdf groups and preserves mixed style runs', async (
   await expect(editor).toHaveValue('Customer Name:');
   await editor.fill('Account Name:');
   await acceptRichFontSubstitutions(page);
-  await expect(page.getByRole('button', { name: 'Apply replacement' })).toBeEnabled();
-  await page.getByRole('button', { name: 'Apply replacement' }).click();
+  await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Account Name: — Editable' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Alex Morgan — Editable' })).toBeVisible();
 
@@ -172,12 +175,12 @@ test('edits inferred wkhtmltopdf groups and preserves mixed style runs', async (
     (run) => getComputedStyle(run).fontWeight,
   ))).toEqual(['400', '700', '400']);
   await acceptRichFontSubstitutions(page);
-  await expect(page.getByRole('button', { name: 'Apply replacement' })).toBeEnabled();
-  await page.getByRole('button', { name: 'Apply replacement' }).click();
+  await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeEnabled();
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(page.getByRole('button', {
     name: 'this is a firm text — Editable',
   })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Download copy' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Save as...', exact: true })).toBeEnabled();
   expect(remoteRequests).toEqual([]);
 });
 
@@ -203,9 +206,9 @@ test('auto-fits a safe horizontal Seller append without the width slider', async
 
   const widthSlider = page.getByLabel('Allowed width');
   const initialWidth = await widthSlider.inputValue();
-  await expect(page.getByRole('button', { name: 'Apply replacement' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Apply', exact: true })).toBeEnabled();
   expect(await widthSlider.inputValue()).not.toBe(initialWidth);
-  await page.getByRole('button', { name: 'Apply replacement' }).click();
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(page.getByRole('button', {
     name: 'Seller: BroadLink Official Store Preferred — Editable',
   })).toBeVisible();
@@ -215,6 +218,7 @@ test('auto-fits a safe horizontal Seller append without the width slider', async
 test('uploads and applies an arbitrary Noto Sans font, then downloads and reopens the edited PDF', async ({ page }) => {
   test.setTimeout(60_000);
   const remoteRequests = await installNoNetworkGuard(page);
+  await useDownloadOnlyBrowser(page);
   await page.goto('/');
   await page.getByLabel('Open PDF').setInputFiles({
     name: 'font-upload.pdf',
@@ -247,7 +251,7 @@ test('uploads and applies an arbitrary Noto Sans font, then downloads and reopen
 
   await editor.fill('Account Name: Trevor Leong');
   await expandAllowedWidth(page);
-  const apply = page.getByRole('button', { name: 'Apply replacement' });
+  const apply = page.getByRole('button', { name: 'Apply', exact: true });
   await expect(apply).toBeEnabled();
   await apply.click();
   await expect(page.getByRole('button', {
@@ -255,11 +259,11 @@ test('uploads and applies an arbitrary Noto Sans font, then downloads and reopen
   })).toBeVisible();
 
   const downloadEvent = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download copy' }).click();
+  await page.getByRole('button', { name: 'Save as...', exact: true }).click();
   const downloadedPath = await (await downloadEvent).path();
   expect(downloadedPath).not.toBeNull();
   const downloadedBytes = await readFile(downloadedPath!);
-  await page.reload();
+  await reloadAfterDiscardingUnsavedChanges(page);
   await page.getByLabel('Open PDF').setInputFiles({
     name: 'sample-edited.pdf',
     mimeType: 'application/pdf',
@@ -274,6 +278,7 @@ test('uploads and applies an arbitrary Noto Sans font, then downloads and reopen
 test('recognises a source underline and round-trips combined decorations', async ({ page }) => {
   test.setTimeout(60_000);
   const remoteRequests = await installNoNetworkGuard(page);
+  await useDownloadOnlyBrowser(page);
   await page.goto('/');
   await page.getByLabel('Open PDF').setInputFiles({
     name: 'source-underline.pdf',
@@ -296,15 +301,15 @@ test('recognises a source underline and round-trips combined decorations', async
   await page.getByLabel('Edit selected text').fill('Marked text');
   await expandAllowedWidth(page);
   await acceptRichFontSubstitutions(page);
-  await page.getByRole('button', { name: 'Apply replacement' }).click();
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Marked text — Editable' })).toBeVisible();
 
   const downloadEvent = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download copy' }).click();
+  await page.getByRole('button', { name: 'Save as...', exact: true }).click();
   const downloadedPath = await (await downloadEvent).path();
   expect(downloadedPath).not.toBeNull();
   const downloadedBytes = await readFile(downloadedPath!);
-  await page.reload();
+  await reloadAfterDiscardingUnsavedChanges(page);
   await page.getByLabel('Open PDF').setInputFiles({
     name: 'combined-edited.pdf',
     mimeType: 'application/pdf',
@@ -344,7 +349,7 @@ test('edits rotated and sheared decorated text', async ({ page }) => {
     await page.getByLabel('Edit selected text').fill(replacement);
     await expandAllowedWidth(page);
     await acceptRichFontSubstitutions(page);
-    await page.getByRole('button', { name: 'Apply replacement' }).click();
+    await page.getByRole('button', { name: 'Apply', exact: true }).click();
     await expect(page.getByRole('button', {
       name: `${replacement} — Editable`,
     })).toBeVisible();
@@ -371,7 +376,7 @@ test('preserves ambiguous nearby line artwork and keeps its warning visible', as
   await editor.fill(replacement);
   await expandAllowedWidth(page);
   await acceptRichFontSubstitutions(page);
-  await page.getByRole('button', { name: 'Apply replacement' }).click();
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
   const editedOverlay = page.getByRole('button', { name: /West.*Editable/ }).first();
   await expect(editedOverlay).toBeVisible();
   await activateByKeyboard(page, editedOverlay);
@@ -427,12 +432,12 @@ test('restores the last good bytes after runtime validation rejects a candidate'
   await page.getByLabel('Edit selected text').fill('Rejected edit');
   await expandAllowedWidth(page);
   await acceptRichFontSubstitutions(page);
-  await page.getByRole('button', { name: 'Apply replacement' }).click();
+  await page.getByRole('button', { name: 'Apply', exact: true }).click();
 
   await expect(page.getByText(
     'Replacement was not applied; the last validated document was restored.',
   )).toBeVisible();
   await expect(page.getByRole('button', { name: /Target 01 — Editable/ })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Download copy' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
   expect(remoteRequests).toEqual([]);
 });

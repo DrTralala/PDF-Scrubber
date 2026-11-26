@@ -23,6 +23,10 @@ import { groupPageText } from './layout/group-lines';
 import { buildTextSelection } from './layout/selection';
 import type { EngineLimits } from './limits';
 import {
+  composePositionedImages,
+  type PositionedImage,
+} from './export/positioned-images';
+import {
   spanAddressKey,
   type AnalysedPage,
   type AnalysedSpan,
@@ -58,6 +62,7 @@ import {
   sourceSpacingScale,
 } from './mutation/source-spacing';
 import { ObjectStore } from './pdf/object-store';
+import { detectDocumentPolicy, permitsUnstructuredImageInsertion } from './pdf/policy';
 import {
   validateCandidateAgainstSource,
   type MutationExpectation,
@@ -85,6 +90,7 @@ export type OpenedDocument = Readonly<{
   fingerprint: string;
   revision: 0;
   fonts: readonly FontDescriptor[];
+  imageInsertionAllowed: boolean;
 }>;
 
 export type SessionAnalysedPage = AnalysedPage & Readonly<{
@@ -307,6 +313,14 @@ export class PdfEngineSessions {
     const owned = bytes.slice();
     const documentFingerprint = await fingerprint(owned);
     const store = await ObjectStore.open(owned, this.#limits);
+    let imageInsertionAllowed = false;
+    try {
+      imageInsertionAllowed = permitsUnstructuredImageInsertion(
+        await detectDocumentPolicy(store),
+      );
+    } catch {
+      // Keep document opening and text editing independent from image policy inspection.
+    }
     const documentId = `document-${this.#nextDocument}-${documentFingerprint.slice(0, 16)}`;
     this.#nextDocument += 1;
     this.#sessions.set(documentId, {
@@ -328,6 +342,7 @@ export class PdfEngineSessions {
       fingerprint: documentFingerprint,
       revision: 0,
       fonts: this.#fonts.list(),
+      imageInsertionAllowed,
     });
   }
 
@@ -690,6 +705,22 @@ export class PdfEngineSessions {
     session.exported.add(key);
     const output = session.bytes.slice();
     return output.buffer;
+  }
+
+  /** Exports placements on the current validated revision without advancing the session. */
+  async exportPositionedImages(
+    documentId: string,
+    revision: number,
+    placements: readonly PositionedImage[],
+  ): Promise<ArrayBuffer> {
+    const session = this.#session(documentId, revision);
+    const bytes = await composePositionedImages(
+      session.bytes,
+      placements,
+      this.#limits,
+      this.#validator,
+    );
+    return bytes.slice().buffer;
   }
 
   closeDocument(documentId: string, revision: number): void {

@@ -16,7 +16,7 @@ function input(overrides: Partial<Parameters<typeof autoFitRichWidth>[0]> = {}) 
     requiredBounds: { x: 10, y: 20, width: 60, height: 12 },
     allowedRegion,
     maxAllowedWidth: 100,
-    fitLineEligible: true,
+    autoFitEligible: true,
     ...overrides,
   } as const;
 }
@@ -26,9 +26,22 @@ describe('automatic rich replacement fitting', () => {
     expect(autoFitRichWidth(input())).toBe(60);
   });
 
+  test('measures the required width from the allowed left edge to the measured right edge', () => {
+    expect(autoFitRichWidth(input({
+      requiredBounds: { x: 12, y: 20, width: 72, height: 12 },
+      allowedRegion: { ...allowedRegion, width: 60 },
+      maxAllowedWidth: 80,
+    }))).toBe(74);
+  });
+
   test.each([
     ['beyond the safe maximum', { maxAllowedWidth: 50 }],
-    ['rotated or sheared', { fitLineEligible: false }],
+    ['four points beyond the safe maximum', {
+      requiredBounds: { x: 12, y: 20, width: 72, height: 12 },
+      allowedRegion: { ...allowedRegion, width: 60 },
+      maxAllowedWidth: 70,
+    }],
+    ['rotated or sheared', { autoFitEligible: false }],
     ['height overflow', { requiredBounds: { x: 10, y: 20, width: 60, height: 13 } }],
     ['left overflow', { requiredBounds: { x: 9, y: 20, width: 60, height: 12 } }],
     ['vertical overflow', { requiredBounds: { x: 10, y: 19, width: 60, height: 12 } }],

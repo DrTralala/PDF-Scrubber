@@ -31,16 +31,19 @@ npx pdf-scrubber@1.2.0
 The CLI prints a local URL and tries to open it in your browser. It uses port `5173` by default and selects an available fallback port if needed. If the browser does not open, visit the printed URL. Press **Ctrl-C** to stop the server.
 
 1. Choose a supported PDF or drop it on the opening screen. Files larger than 15 MiB are rejected.
-2. Select editable text and enter a replacement. Wait for **Replacement is ready**, review any font-substitution prompt, then choose **Apply replacement**.
-3. Choose **Download copy** to save the edited PDF. The source file is not overwritten.
+2. Select editable text and enter a replacement. Wait for **Replacement is ready**, review any font-substitution prompt, then choose **Apply**.
+3. Choose **Save** to overwrite the open PDF, or **Save as...** to choose another file. After a successful **Save as...**, further saves update that file. If your browser cannot write to the original, use **Save as...** instead.
+
+Closing the window or tab warns you about unsaved edits, including replacement text you have not yet applied. If your browser only supports downloading a copy, the original stays untouched and the warning stays active: the editor cannot confirm that the download finished.
 
 ## Capabilities and limits
 
 - **Replace existing text:** compatible text is grouped into editable fields and lines. Mixed style runs and recognised text decorations are preserved where supported.
-- **Check before applying:** the editor previews replacements, checks fit and validates edits before making a copy available to download.
+- **Insert images:** add PNG or JPEG images, then move and resize them on the page. They start at intrinsic pixel dimensions and are not automatically shrunk to fit.
+- **Check before applying:** the editor previews replacements, checks fit and validates edits before saving.
 - **Keep processing local:** PDF and uploaded-font bytes are processed in the browser, not sent to the local static server.
 
-The editor only works with supported machine-readable text. It does not add text or images, perform OCR on scanned pages, reflow paragraphs or provide per-change undo. **Reset** restores the original PDF and removes all replacements. Text the editor marks read-only cannot be changed. The PDF engine accepts unfiltered streams and single `/FlateDecode` streams; it rejects other stream filters and multi-filter chains.
+The editor replaces supported machine-readable text but does not add text, perform OCR on scanned pages, reflow paragraphs or provide per-change undo. Image files are limited to 15 MiB and 12 megapixels each; export also limits the combined distinct-image bytes to 15 MiB and pixels to 12 megapixels. Image insertion is unavailable for tagged or PDF/UA PDFs, or when the engine cannot verify their accessibility policy. **Reset** restores the original PDF and removes all text edits and inserted images. Text the editor marks read-only cannot be changed. The PDF engine accepts unfiltered streams and single `/FlateDecode` streams; it rejects other stream filters and multi-filter chains.
 
 The current engine limits are:
 
@@ -51,7 +54,8 @@ The current engine limits are:
 | Nesting depth | 12 |
 | Decoded stream size | 4 MiB |
 | Operations per content stream | 50,000 |
-| Page image area | 12 megapixels |
+| Rendered page area | 12 megapixels per page |
+| Inserted images | 15 MiB and 12 megapixels per image; 15 MiB and 12 megapixels across distinct images |
 | Processing time | 30 seconds |
 
 A PDF below 15 MiB can still exceed another limit. Unsupported PDF features or malformed content may also prevent editing.

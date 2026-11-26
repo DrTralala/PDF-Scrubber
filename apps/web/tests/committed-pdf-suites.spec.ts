@@ -11,12 +11,17 @@ import {
   type LoadedCommittedPdfSuite,
 } from '../../../tools/committed-pdf-suites';
 import { installNoNetworkGuard } from '../../../tools/check-no-network';
+import {
+  reloadAfterDiscardingUnsavedChanges,
+  useDownloadOnlyBrowser,
+} from './editor-interactions';
 
 const selectedSuites = new Set(
   selectedCommittedPdfSuites(process.env.PDF_SCRUBBER_COMMITTED_PDF_MODE),
 );
 
 async function openSuite(page: Page, loaded: LoadedCommittedPdfSuite): Promise<void> {
+  await useDownloadOnlyBrowser(page);
   await page.goto('/');
   await page.getByLabel('Open PDF').setInputFiles(loaded.pdfPath);
   await expect(page.getByTestId('pdf-canvas')).toBeVisible();
@@ -177,12 +182,7 @@ async function applyEdit(
 
   const fitStatus = page.locator('.fit-status');
   await expect(fitStatus).toContainText(/(?:Fits|Overflow):/);
-  const fitLine = page.getByRole('button', { name: 'Fit line' });
-  if (await fitLine.isVisible()) {
-    await expect(fitStatus).toContainText('Overflow:');
-    await fitLine.click();
-    await expect(fitStatus).toContainText('Fits:');
-  }
+  await expect(page.getByRole('checkbox', { name: 'Auto' })).toBeChecked();
 
   const consents = page.locator('.font-requirements input[type="checkbox"]');
   for (let index = 0; index < await consents.count(); index += 1) {
@@ -191,7 +191,7 @@ async function applyEdit(
     if (!(await consent.isChecked())) await consent.check();
   }
 
-  const apply = page.getByRole('button', { name: 'Apply replacement' });
+  const apply = page.getByRole('button', { name: 'Apply', exact: true });
   await expect(apply).toBeEnabled();
   await apply.click();
   const appliedPage = await confirmedPageFrame(page, edit.pageIndex);
@@ -206,7 +206,7 @@ async function exportOnce(
   loaded: LoadedCommittedPdfSuite,
 ): Promise<string> {
   const downloadEvent = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download copy' }).click();
+  await page.getByRole('button', { name: 'Save as...', exact: true }).click();
   const download = await downloadEvent;
   expect(download.suggestedFilename()).toBe(
     `${basename(loaded.pdfPath, '.pdf')}-edited.pdf`,
@@ -223,7 +223,7 @@ async function reopenExport(
   bytes: Uint8Array,
   edits: readonly CommittedPdfEdit[],
 ): Promise<void> {
-  await page.reload();
+  await reloadAfterDiscardingUnsavedChanges(page);
   await page.getByLabel('Open PDF').setInputFiles({
     name: 'document-edited.pdf',
     mimeType: 'application/pdf',

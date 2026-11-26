@@ -8,6 +8,7 @@ import type {
   FontMatchKind,
   FontSourceKind,
   PageSpace,
+  PositionedImage,
   SessionRichReplacementPayload,
   SessionRichReplacementPreconditions,
   SessionReplacementPreconditions,
@@ -26,6 +27,7 @@ export const ENGINE_OPERATIONS = [
   'validateCandidate',
   'validateExport',
   'exportDocument',
+  'exportPositionedImages',
   'closeDocument',
 ] as const;
 
@@ -55,6 +57,7 @@ export type ReplacementPayload = Readonly<{
 export type ReplacementPreconditions = SessionReplacementPreconditions;
 export type RichReplacementPayload = SessionRichReplacementPayload;
 export type RichReplacementPreconditions = SessionRichReplacementPreconditions;
+export type PositionedImagesPayload = Readonly<{ images: readonly PositionedImage[] }>;
 
 export type EngineRequest =
   | RequestBase<'ping', null>
@@ -78,6 +81,7 @@ export type EngineRequest =
       Readonly<{
         preconditions: Readonly<{ validatedCandidateHash: string }>;
       }>)
+  | DocumentRequest<'exportPositionedImages', PositionedImagesPayload>
   | DocumentRequest<'closeDocument', null>;
 
 export type OpenDocumentResult = Readonly<{
@@ -85,6 +89,7 @@ export type OpenDocumentResult = Readonly<{
   fingerprint: string;
   revision: 0;
   fonts: readonly FontDescriptor[];
+  imageInsertionAllowed: boolean;
 }>;
 
 export type InspectDocumentFontsResult = readonly DocumentEditingFont[];
@@ -214,6 +219,12 @@ export type EngineSuccessResponse =
   | Readonly<{
       requestId: string;
       operation: 'exportDocument';
+      ok: true;
+      value: Readonly<{ bytes: ArrayBuffer }>;
+    }>
+  | Readonly<{
+      requestId: string;
+      operation: 'exportPositionedImages';
       ok: true;
       value: Readonly<{ bytes: ArrayBuffer }>;
     }>

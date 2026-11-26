@@ -33,4 +33,61 @@ export function isAllowedSessionPermission(
   permission: string,
   requestingUrl: string,
   editorOrigin: string,
+  details?: Readonly<{
+    filePath?: string;
+    isDirectory?: boolean;
+    fileAccessType?: 'readable' | 'writable';
+  }>,
 ): boolean;
+export function configureEditorSessionPermissions(
+  session: Readonly<{
+    setPermissionCheckHandler(handler: (
+      contents: object | null,
+      permission: string,
+      requestingOrigin: string,
+      details: Readonly<{
+        filePath?: string;
+        isDirectory?: boolean;
+        fileAccessType?: 'readable' | 'writable';
+      }>,
+    ) => boolean): void;
+    setPermissionRequestHandler(handler: (
+      contents: object,
+      permission: string,
+      callback: (granted: boolean) => void,
+      details: Readonly<{
+        requestingUrl: string;
+        filePath?: string;
+        isDirectory?: boolean;
+        fileAccessType?: 'readable' | 'writable';
+      }>,
+    ) => void): void;
+  }>,
+  editorContents: object,
+  editorOrigin: string,
+): void;
+export function installUnsavedCloseWarning(
+  window: Readonly<{
+    webContents: Readonly<{
+      on(event: 'will-prevent-unload', listener: (event: Readonly<{
+        preventDefault(): void;
+      }>) => void): void;
+      getTitle(): string;
+    }>;
+  }>,
+  dialog: Readonly<{
+    showMessageBoxSync(
+      parent: object,
+      options: Readonly<{
+        type: 'warning';
+        title: 'Unsaved changes';
+        message: string;
+        buttons: readonly ['Keep editing', 'Exit without saving'];
+        defaultId: 0;
+        cancelId: 0;
+        noLink: true;
+      }>,
+    ): number;
+  }>,
+  onPrompt?: (attempt: number) => void,
+): void;

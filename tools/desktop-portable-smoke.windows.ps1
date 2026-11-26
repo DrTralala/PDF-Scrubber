@@ -1,14 +1,15 @@
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('ForceRuntimeExit', 'SnapshotOwnedProcesses', 'TerminateOwnedTree')]
+  [ValidateSet('ForceRuntimeExit', 'SnapshotOwnedProcesses', 'TerminateOwnedTree', 'SendWindowKey')]
   [string] $Operation,
   [Parameter(Mandatory = $true)]
   [string] $ApplicationRoot,
   [Parameter(Mandatory = $true)]
   [string] $LauncherPath,
   [int] $Port = 0,
-  [int] $RootProcessId = 0
+  [int] $RootProcessId = 0,
+  [string] $Key = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -134,6 +135,36 @@ function Start-OwnedProcess([string] $Path, [string[]] $Arguments = @()) {
   return $process
 }
 
+function Send-WindowKey(
+  [int] $RootProcessId,
+  [ValidateSet('AltF4', 'Escape', 'Enter', 'TabEnter')]
+  [string] $Key
+) {
+  if ($RootProcessId -le 0) { throw 'SendWindowKey requires a positive task-owned Electron process ID.' }
+  $targetProcess = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $RootProcessId" -ErrorAction Stop
+  if ($null -eq $targetProcess -or [string]::IsNullOrWhiteSpace([string]$targetProcess.ExecutablePath)) {
+    throw 'Could not verify the task-owned Electron process before sending a window key.'
+  }
+  $targetPath = Normalize-WindowsPath ([string]$targetProcess.ExecutablePath)
+  if (-not $targetPath.Equals((Normalize-WindowsPath $nativeRuntime), [StringComparison]::OrdinalIgnoreCase)) {
+    throw 'Refusing to send a window key to a process outside this task-owned portable runtime.'
+  }
+
+  $keys = switch ($Key) {
+    'AltF4' { '%{F4}' }
+    'Escape' { '{ESC}' }
+    'Enter' { '{ENTER}' }
+    'TabEnter' { '{TAB}{ENTER}' }
+    default { throw 'SendWindowKey received an unsupported key action.' }
+  }
+  $shell = New-Object -ComObject WScript.Shell -ErrorAction Stop
+  if (-not $shell.AppActivate($RootProcessId)) {
+    throw 'Could not activate the verified task-owned portable window.'
+  }
+  Start-Sleep -Milliseconds 200
+  $shell.SendKeys($keys)
+}
+
 try {
   switch ($Operation) {
     'ForceRuntimeExit' {
@@ -186,6 +217,10 @@ try {
 
     'TerminateOwnedTree' {
       Stop-OwnedPortableProcessTree $RootProcessId
+    }
+
+    'SendWindowKey' {
+      Send-WindowKey $RootProcessId $Key
     }
 
     'SnapshotOwnedProcesses' {

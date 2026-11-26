@@ -20,12 +20,18 @@ import { ReplacementInspector } from './replacement-inspector';
 
 function richEditorSnapshot({
   requiredWidth,
+  requiredXOffset = 0,
+  requiredYOffset = 0,
+  requiredHeight = 12,
   allowedWidth,
   maxAllowedWidth,
   fits,
   baselineDirection = [1, 0],
 }: Readonly<{
   requiredWidth: number;
+  requiredXOffset?: number;
+  requiredYOffset?: number;
+  requiredHeight?: number;
   allowedWidth: number;
   maxAllowedWidth: number;
   fits: boolean;
@@ -67,7 +73,13 @@ function richEditorSnapshot({
       preview: {
         ...basePreview,
         selectionKey: textSelection.key,
-        replacementBounds: { ...textSelection.bounds, width: requiredWidth },
+        replacementBounds: {
+          ...textSelection.bounds,
+          x: textSelection.bounds.x + requiredXOffset,
+          y: textSelection.bounds.y + requiredYOffset,
+          width: requiredWidth,
+          height: requiredHeight,
+        },
         allowedRegion: { ...textSelection.bounds, width: allowedWidth },
         fits,
         preconditions: {
@@ -140,7 +152,7 @@ it('requires a matching substitution preview and applies once', async () => {
       snapshot={controller.getSnapshot()}
     />,
   );
-  const apply = screen.getByRole('button', { name: 'Apply replacement' });
+  const apply = screen.getByRole('button', { name: 'Apply' });
   expect(screen.getByText('Font substitution required')).toBeTruthy();
   expect(apply).toHaveProperty('disabled', true);
 
@@ -163,7 +175,7 @@ it('requires a matching substitution preview and applies once', async () => {
       snapshot={controller.getSnapshot()}
     />,
   );
-  await userEvent.click(screen.getByRole('button', { name: 'Apply replacement' }));
+  await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
   expect(controller.applySelection).toHaveBeenCalledTimes(1);
 });
 
@@ -187,7 +199,7 @@ it('disables Apply as soon as replacement input invalidates the preview', async 
     />,
   );
 
-  expect(screen.getByRole('button', { name: 'Apply replacement' }))
+  expect(screen.getByRole('button', { name: 'Apply' }))
     .toHaveProperty('disabled', true);
 });
 
@@ -308,40 +320,91 @@ it('edits and formats source-backed rich text with fit and font controls', async
 
   fireEvent.change(screen.getByLabelText('Allowed width'), { target: { value: '60' } });
   expect(controller.setRichAllowedWidth).toHaveBeenCalledWith(60);
-  expect(screen.getByRole('button', { name: 'Apply replacement' }))
+  expect(screen.getByRole('button', { name: 'Apply' }))
     .toHaveProperty('disabled', true);
 });
 
-it('fits an overflowing line to the measured width and clamps at the safe maximum', async () => {
+it('automatically widens only to the measured right edge relative to the allowed left edge', () => {
   const controller = readyController(richEditorSnapshot({
-    requiredWidth: 54,
-    allowedWidth: 36,
-    maxAllowedWidth: 72,
+    requiredWidth: 72,
+    requiredXOffset: 2,
+    allowedWidth: 60,
+    maxAllowedWidth: 80,
     fits: false,
+  }));
+  render(
+    <ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />,
+  );
+
+  expect(controller.setRichAllowedWidth).toHaveBeenCalledWith(74);
+});
+
+it('reports the measured right-edge shortfall when the maximum line width is insufficient', () => {
+  const controller = readyController(richEditorSnapshot({
+    requiredWidth: 72,
+    requiredXOffset: 2,
+    allowedWidth: 60,
+    maxAllowedWidth: 70,
+    fits: false,
+  }));
+  render(<ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />);
+
+  expect(screen.getByText(/measured right edge 84\.0 pt; maximum right edge 80\.0 pt/)).toBeTruthy();
+  expect(screen.getByText(/4\.0 pt short/)).toBeTruthy();
+  expect(controller.setRichAllowedWidth).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: 'Apply' }))
+    .toHaveProperty('disabled', true);
+});
+
+it('keeps Auto on by default and preserves manual width control when disabled', async () => {
+  const controller = readyController(richEditorSnapshot({
+    requiredWidth: 30,
+    allowedWidth: 36,
+    maxAllowedWidth: 80,
+    fits: true,
   }));
   const { rerender } = render(
     <ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />,
   );
+  const auto = screen.getByRole('checkbox', { name: 'Auto' });
+  expect(auto).toHaveProperty('checked', true);
 
-  await userEvent.click(screen.getByRole('button', { name: 'Fit line' }));
-  expect(controller.setRichAllowedWidth).toHaveBeenLastCalledWith(54);
-
+  await userEvent.click(auto);
   controller.publish(richEditorSnapshot({
-    requiredWidth: 90,
-    allowedWidth: 36,
-    maxAllowedWidth: 72,
+    requiredWidth: 72,
+    requiredXOffset: 2,
+    allowedWidth: 60,
+    maxAllowedWidth: 80,
     fits: false,
   }));
   rerender(<ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />);
-  await userEvent.click(screen.getByRole('button', { name: 'Fit line' }));
-  expect(controller.setRichAllowedWidth).toHaveBeenLastCalledWith(72);
-  expect(screen.getByRole('button', { name: 'Apply replacement' }))
-    .toHaveProperty('disabled', true);
+
+  expect(controller.setRichAllowedWidth).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText('Allowed width'), { target: { value: '68' } });
+  expect(controller.setRichAllowedWidth).toHaveBeenCalledWith(68);
 });
 
-it('automatically requests a safe horizontal width for rich overflow', () => {
+it('shows Auto while waiting for a shaped measurement without changing the width', () => {
+  const controller = readyController(richEditorSnapshot({
+    requiredWidth: 30,
+    allowedWidth: 36,
+    maxAllowedWidth: 72,
+    fits: true,
+  }));
+  controller.publish({
+    richEditor: { ...controller.getSnapshot().richEditor!, preview: null },
+  });
+  render(<ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />);
+
+  expect(screen.getByRole('checkbox', { name: 'Auto' })).toHaveProperty('checked', true);
+  expect(screen.getByText(/Waiting for shaped measurement/)).toBeTruthy();
+  expect(controller.setRichAllowedWidth).not.toHaveBeenCalled();
+});
+
+it('reports left overflow separately from width fitting', () => {
   const controller = readyController(richEditorSnapshot({
     requiredWidth: 54,
+    requiredXOffset: -2,
     allowedWidth: 36,
     maxAllowedWidth: 72,
     fits: false,
@@ -349,26 +412,23 @@ it('automatically requests a safe horizontal width for rich overflow', () => {
 
   render(<ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />);
 
-  expect(controller.setRichAllowedWidth).toHaveBeenCalledWith(54);
+  expect(screen.getByText(/Left overflow: measured left edge/)).toBeTruthy();
+  expect(controller.setRichAllowedWidth).not.toHaveBeenCalled();
 });
 
-it('does not offer Fit line without a measured overflow', () => {
+it('reports vertical overflow separately from width fitting', () => {
   const controller = readyController(richEditorSnapshot({
-    requiredWidth: 30,
+    requiredWidth: 54,
+    requiredYOffset: 2,
     allowedWidth: 36,
     maxAllowedWidth: 72,
-    fits: true,
+    fits: false,
   }));
-  const { rerender } = render(
-    <ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />,
-  );
-  expect(screen.queryByRole('button', { name: 'Fit line' })).toBeNull();
 
-  controller.publish({
-    richEditor: { ...controller.getSnapshot().richEditor!, preview: null },
-  });
-  rerender(<ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />);
-  expect(screen.queryByRole('button', { name: 'Fit line' })).toBeNull();
+  render(<ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />);
+
+  expect(screen.getByText(/Vertical overflow: measured bounds/)).toBeTruthy();
+  expect(controller.setRichAllowedWidth).not.toHaveBeenCalled();
 });
 
 it.each([
@@ -387,10 +447,10 @@ it.each([
 
   render(<ReplacementInspector controller={controller} snapshot={controller.getSnapshot()} />);
 
-  expect(screen.queryByRole('button', { name: 'Fit line' })).toBeNull();
-  expect(screen.getByText('Automatic fitting is unavailable for rotated text.')).toBeTruthy();
+  expect(screen.getByRole('checkbox', { name: 'Auto' })).toHaveProperty('checked', true);
+  expect(screen.getByText(/Automatic fitting is unavailable for rotated or non-horizontal text/)).toBeTruthy();
   expect(controller.setRichAllowedWidth).not.toHaveBeenCalled();
-  expect(screen.getByRole('button', { name: 'Apply replacement' }))
+  expect(screen.getByRole('button', { name: 'Apply' }))
     .toHaveProperty('disabled', true);
 });
 

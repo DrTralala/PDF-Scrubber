@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,6 +12,7 @@ import {
   assertPortableWindowFitsWorkArea,
   assertPortableWindowRecord,
   assertPortableShutdownDiagnostic,
+  readPortableDiagnostics,
   waitForDiagnosticRecord,
 } from './desktop-portable-session';
 import {
@@ -47,6 +48,25 @@ test('closes diagnostic streams and bounds waiting for a stalled reader', async 
     streamsClosed = true;
   }, 5)).resolves.toBeUndefined();
   expect(streamsClosed).toBe(true);
+});
+
+test('reads bounded file-backed diagnostics for the current portable session', async () => {
+  const directory = await mkdtemp(join(tmpdir(), `pdf-scrubber-diagnostics-${randomUUID()}-`));
+  try {
+    await writeFile(join(directory, 'desktop-diagnostics.jsonl'), [
+      '{"event":"portable-managed-paths","processId":123}',
+      'not a diagnostic record',
+      '{"event":"unsaved-close-prompt-1"}',
+      '',
+    ].join('\n'));
+
+    await expect(readPortableDiagnostics({ downloadDirectory: directory })).resolves.toEqual([
+      { event: 'portable-managed-paths', processId: 123 },
+      { event: 'unsaved-close-prompt-1' },
+    ]);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 
 test('waits for a delayed portable window-ready diagnostic before asserting its dimensions', async () => {
@@ -243,7 +263,7 @@ test('retains owned-process forced-exit checks and marks negative dialog checks 
     readFile(join(import.meta.dirname, 'desktop-portable-lifecycle.ts'), 'utf8'),
   ]);
 
-  expect(helper).toContain("[ValidateSet('ForceRuntimeExit', 'SnapshotOwnedProcesses', 'TerminateOwnedTree')]");
+  expect(helper).toContain("[ValidateSet('ForceRuntimeExit', 'SnapshotOwnedProcesses', 'TerminateOwnedTree', 'SendWindowKey')]");
   expect(helper).toContain('Get-OwnedProcessTree');
   expect(helper).toContain('Get-OwnedProcessSnapshot');
   expect(helper).toContain('StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase)');
@@ -269,4 +289,26 @@ test('retains owned-process forced-exit checks and marks negative dialog checks 
   expect(lifecycle).toContain("'Portable desktop edit'");
   expect(lifecycle).toContain('remoteRequests');
   expect(lifecycle).toContain('missingSettings');
+});
+
+test('smokes current save-copy and dirty-close behaviour while retaining historical editor compatibility', async () => {
+  const [helper, lifecycle] = await Promise.all([
+    readFile(join(import.meta.dirname, 'desktop-portable-smoke.windows.ps1'), 'utf8'),
+    readFile(join(import.meta.dirname, 'desktop-portable-lifecycle.ts'), 'utf8'),
+  ]);
+
+  expect(lifecycle).toContain("name: 'Save as...'");
+  expect(lifecycle).toContain("name: 'Download copy'");
+  expect(lifecycle).toContain('fileSystemPickerSupport');
+  expect(lifecycle).toContain('await exerciseUnsavedCloseFlow(first);');
+  expect(lifecycle).toContain("await sendPortableWindowKey(repeat, 'AltF4');");
+  expect(lifecycle).toContain('cleanCloseCheck');
+  expect(lifecycle).toContain("const dirtyCloseCheck = supportsSaveAs ? 'passed' : 'skipped-legacy-editor';");
+  expect(lifecycle).toContain('dirtyCloseCheck,');
+  expect(lifecycle).toContain('unsaved-close-prompt-${attempt}');
+
+  expect(helper).toContain("'SendWindowKey'");
+  expect(helper).toContain("[ValidateSet('AltF4', 'Escape', 'Enter', 'TabEnter')]");
+  expect(helper).toContain('$shell.AppActivate($RootProcessId)');
+  expect(helper).toContain('$shell.SendKeys($keys)');
 });

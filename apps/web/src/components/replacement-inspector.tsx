@@ -23,6 +23,7 @@ export function ReplacementInspector({
 }>): JSX.Element {
   const [replacement, setReplacement] = useState(snapshot.replacement);
   const [editorRange, setEditorRange] = useState<HalfOpenRange>({ start: 0, end: 0 });
+  const [autoFitEnabled, setAutoFitEnabled] = useState(true);
   const selectedTextKey = snapshot.selection?.kind === 'text'
     ? snapshot.selection.textSelection.key
     : null;
@@ -39,7 +40,7 @@ export function ReplacementInspector({
         ({ key }) => key === selection.textSelection.lineKey,
       )
     : undefined;
-  const fitLineEligible = selectedLine !== undefined &&
+  const autoFitEligible = selectedLine !== undefined &&
     isLeftToRightHorizontalBaseline(selectedLine.baselineDirection);
   const richPreview = selection?.kind === 'text'
     ? snapshot.richEditor?.preview ?? null
@@ -47,15 +48,15 @@ export function ReplacementInspector({
   const allowedRegion = snapshot.richEditor?.allowedRegion ?? null;
   const maxAllowedWidth = snapshot.richEditor?.maxAllowedWidth ?? 0;
   useEffect(() => {
-    if (richPreview === null || allowedRegion === null) return;
+    if (!autoFitEnabled || richPreview === null || allowedRegion === null) return;
     const nextWidth = autoFitRichWidth({
       requiredBounds: richPreview.replacementBounds,
       allowedRegion,
       maxAllowedWidth,
-      fitLineEligible,
+      autoFitEligible,
     });
     if (nextWidth !== null) controller.setRichAllowedWidth(nextWidth);
-  }, [allowedRegion, controller, fitLineEligible, maxAllowedWidth, richPreview]);
+  }, [allowedRegion, autoFitEnabled, autoFitEligible, controller, maxAllowedWidth, richPreview]);
 
   if (selection === null) {
     return (
@@ -150,8 +151,10 @@ export function ReplacementInspector({
           allowedRegion={richEditor.allowedRegion}
           maxAllowedWidth={richEditor.maxAllowedWidth}
           preview={preview}
-          fitLineEligible={fitLineEligible}
+          autoFitEligible={autoFitEligible}
+          autoFitEnabled={autoFitEnabled}
           onWidth={(width) => controller.setRichAllowedWidth(width)}
+          onAutoFitChange={setAutoFitEnabled}
         />
         <div className="preview-status" aria-live="polite">
           {snapshot.phase === 'applying'
@@ -171,7 +174,7 @@ export function ReplacementInspector({
           className="apply-replacement"
           disabled={!canApply}
           onClick={() => void controller.applySelection()}
-        >Apply replacement</button>
+        >Apply</button>
       </div>
     );
   }
@@ -265,7 +268,7 @@ export function ReplacementInspector({
         disabled={!canApply}
         onClick={() => void controller.applySelection()}
       >
-        Apply replacement
+        Apply
       </button>
     </div>
   );

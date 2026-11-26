@@ -1,12 +1,15 @@
+import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 
 import {
   createBoundedDiagnosticWriter,
   createDesktopDownloadDiagnostic,
   createSecureWebPreferences,
+  configureEditorSessionPermissions,
   fontSearchTarget,
+  installUnsavedCloseWarning,
   isAllowedDesktopDownload,
   isAllowedEditorURL,
   isAllowedNetworkRequest,
@@ -31,6 +34,27 @@ const require = createRequire(import.meta.url);
 const smokeDiagnostics = require('../apps/desktop/runtime/smoke-diagnostics.cjs') as Readonly<{
   createSmokeDiagnosticSink(dependencies: SmokeDiagnosticDependencies): SmokeDiagnosticSink;
 }>;
+
+type FileSystemPermissionDetails = Readonly<{
+  requestingUrl?: string;
+  filePath?: string;
+  isDirectory?: boolean;
+  fileAccessType?: 'readable' | 'writable';
+}>;
+
+type PermissionCheckHandler = (
+  contents: object | null,
+  permission: string,
+  requestingOrigin: string,
+  details: FileSystemPermissionDetails,
+) => boolean;
+
+type PermissionRequestHandler = (
+  contents: object,
+  permission: string,
+  callback: (granted: boolean) => void,
+  details: Readonly<FileSystemPermissionDetails & { requestingUrl: string }>,
+) => void;
 
 const editorOrigin = 'http://127.0.0.1:43127';
 
@@ -61,10 +85,180 @@ test('allows only the exact editor origin for page navigation and renderer reque
   expect(isAllowedNetworkRequest('wss://example.com/socket', editorOrigin)).toBe(false);
 });
 
-test('grants only Local Font Access to the trusted editor origin', () => {
+test('allows only Local Font Access and user-picked PDF file handles at the trusted editor origin', () => {
+  const allowPermission = (permission: string, requestingUrl: string, details?: FileSystemPermissionDetails) => (
+    isAllowedSessionPermission(permission, requestingUrl, editorOrigin, details)
+  );
+
   expect(isAllowedSessionPermission('local-fonts', editorOrigin, editorOrigin)).toBe(true);
   expect(isAllowedSessionPermission('local-fonts', 'https://example.com', editorOrigin)).toBe(false);
   expect(isAllowedSessionPermission('geolocation', editorOrigin, editorOrigin)).toBe(false);
+  expect(isAllowedSessionPermission('fileSystem', editorOrigin, editorOrigin)).toBe(false);
+  expect(allowPermission('fileSystem', editorOrigin, {
+    filePath: 'C:\\Users\\Example\\Documents\\edited.PDF',
+    isDirectory: false,
+    fileAccessType: 'readable',
+  })).toBe(true);
+  expect(allowPermission('fileSystem', editorOrigin, {
+    filePath: 'C:\\Users\\Example\\Documents\\edited.pdf',
+    isDirectory: false,
+    fileAccessType: 'writable',
+  })).toBe(true);
+  expect(allowPermission('fileSystem', editorOrigin, {
+    filePath: 'C:\\Users\\Example\\Documents\\folder.pdf',
+    isDirectory: true,
+    fileAccessType: 'writable',
+  })).toBe(false);
+  expect(allowPermission('fileSystem', editorOrigin, {
+    filePath: 'C:\\Users\\Example\\Documents\\notes.txt',
+    isDirectory: false,
+    fileAccessType: 'writable',
+  })).toBe(false);
+  expect(allowPermission('fileSystem', editorOrigin, {
+    filePath: 'C:\\Users\\Example\\Documents\\edited.pdf',
+    isDirectory: false,
+  })).toBe(false);
+  expect(allowPermission('fileSystem', editorOrigin, {
+    filePath: 'relative/edited.pdf',
+    isDirectory: false,
+    fileAccessType: 'writable',
+  })).toBe(false);
+  expect(allowPermission('fileSystem', 'https://example.com', {
+    filePath: 'C:\\Users\\Example\\Documents\\edited.pdf',
+    isDirectory: false,
+    fileAccessType: 'writable',
+  })).toBe(false);
+});
+
+test('installs per-window permission checks that limit filesystem access to a selected PDF', () => {
+  let checkPermission: PermissionCheckHandler | undefined;
+  let requestPermission: PermissionRequestHandler | undefined;
+  const contents = { getURL: () => `${editorOrigin}/` };
+  const session = {
+    setPermissionCheckHandler: vi.fn((handler: PermissionCheckHandler) => { checkPermission = handler; }),
+    setPermissionRequestHandler: vi.fn((handler: PermissionRequestHandler) => { requestPermission = handler; }),
+  };
+
+  configureEditorSessionPermissions(session, contents, editorOrigin);
+
+  expect(session.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
+  expect(session.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
+  expect(checkPermission?.(contents, 'fileSystem', editorOrigin, {
+    filePath: 'C:\\Users\\Example\\edited.pdf',
+    isDirectory: false,
+    fileAccessType: 'writable',
+  })).toBe(true);
+  expect(checkPermission?.({} as object, 'fileSystem', editorOrigin, {
+    filePath: 'C:\\Users\\Example\\edited.pdf',
+    isDirectory: false,
+    fileAccessType: 'writable',
+  })).toBe(false);
+  expect(checkPermission?.(contents, 'fileSystem', editorOrigin, {
+    filePath: 'C:\\Users\\Example\\folder.pdf',
+    isDirectory: true,
+    fileAccessType: 'writable',
+  })).toBe(false);
+
+  const outcomes: boolean[] = [];
+  requestPermission?.(contents, 'fileSystem', (granted) => outcomes.push(granted), {
+    requestingUrl: `${editorOrigin}/`,
+    filePath: 'C:\\Users\\Example\\edited.pdf',
+    isDirectory: false,
+    fileAccessType: 'writable',
+  });
+  requestPermission?.(contents, 'fileSystem', (granted) => outcomes.push(granted), {
+    requestingUrl: '',
+    filePath: 'C:\\Users\\Example\\edited.pdf',
+    isDirectory: false,
+    fileAccessType: 'readable',
+  });
+  requestPermission?.(contents, 'fileSystem', (granted) => outcomes.push(granted), {
+    requestingUrl: 'https://example.com/',
+    filePath: 'C:\\Users\\Example\\edited.pdf',
+    isDirectory: false,
+    fileAccessType: 'writable',
+  });
+  requestPermission?.(contents, 'fileSystem', (granted) => outcomes.push(granted), {
+    requestingUrl: `${editorOrigin}/`,
+    filePath: 'C:\\Users\\Example\\folder.pdf',
+    isDirectory: true,
+    fileAccessType: 'writable',
+  });
+  expect(outcomes).toEqual([true, false, false, false]);
+});
+
+test('confirms dirty close through one parented native modal and leaves clean close unprompted', () => {
+  let title = 'PDF-Scrubber';
+  const registeredEvents: string[] = [];
+  let preventUnload: ((event: Readonly<{ preventDefault(): void }>) => void) | undefined;
+  const parent = {
+    webContents: {
+      on(event: 'will-prevent-unload', listener: (event: Readonly<{ preventDefault(): void }>) => void) {
+        registeredEvents.push(event);
+        preventUnload = listener;
+      },
+      getTitle: () => title,
+    },
+  };
+  const showMessageBoxSync = vi.fn().mockReturnValue(0);
+  const onPrompt = vi.fn();
+  installUnsavedCloseWarning(parent, { showMessageBoxSync }, onPrompt);
+
+  expect(registeredEvents).toEqual(['will-prevent-unload']);
+  expect(showMessageBoxSync).not.toHaveBeenCalled();
+
+  title = 'report <script>alert(1)</script>.pdf — Unsaved changes | PDF-Scrubber';
+  const keepEditingEvent = { preventDefault: vi.fn() };
+  preventUnload?.(keepEditingEvent);
+
+  expect(showMessageBoxSync).toHaveBeenCalledTimes(1);
+  expect(showMessageBoxSync).toHaveBeenCalledWith(parent, {
+    type: 'warning',
+    title: 'Unsaved changes',
+    message: 'Exit without saving changes to “report <script>alert(1)</script>.pdf”?',
+    buttons: ['Keep editing', 'Exit without saving'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  });
+  expect(keepEditingEvent.preventDefault).not.toHaveBeenCalled();
+  expect(onPrompt).toHaveBeenCalledWith(1);
+});
+
+test('allows the renderer to unload synchronously only after confirmed discard, including repeated attempts', () => {
+  const listeners: Array<(event: Readonly<{ preventDefault(): void }>) => void> = [];
+  const parent = {
+    webContents: {
+      on(_event: 'will-prevent-unload', listener: (event: Readonly<{ preventDefault(): void }>) => void) {
+        listeners.push(listener);
+      },
+      getTitle: () => 'notes.pdf — Unsaved changes | PDF-Scrubber',
+    },
+  };
+  const choices = [0, 1];
+  const showMessageBoxSync = vi.fn(() => choices.shift() ?? 0);
+  const attempts: number[] = [];
+  installUnsavedCloseWarning(parent, { showMessageBoxSync }, (attempt) => attempts.push(attempt));
+
+  const firstClose = { preventDefault: vi.fn() };
+  listeners[0]?.(firstClose);
+  expect(firstClose.preventDefault).not.toHaveBeenCalled();
+
+  const secondClose = { preventDefault: vi.fn() };
+  listeners[0]?.(secondClose);
+  expect(secondClose.preventDefault).toHaveBeenCalledTimes(1);
+  expect(showMessageBoxSync).toHaveBeenCalledTimes(2);
+  expect(attempts).toEqual([1, 2]);
+});
+
+test('wires the tested close and filesystem policy into the desktop runtime without IPC or restricted-path overrides', async () => {
+  const main = await readFile(new URL('../apps/desktop/runtime/main.cjs', import.meta.url), 'utf8');
+
+  expect(main).toContain('securityPolicy.configureEditorSessionPermissions(editorSession, window.webContents, editorOrigin);');
+  expect(main).toContain('securityPolicy.installUnsavedCloseWarning(mainWindow, dialog,');
+  expect(main).toContain('event: `unsaved-close-prompt-${attempt}`');
+  expect(main).not.toContain('file-system-access-restricted');
+  expect(main).not.toMatch(/\bipcMain\b/);
 });
 
 test('accepts only user-triggered PDF downloads from the main editor window', () => {
@@ -232,4 +426,5 @@ test('keeps renderer Node access and insecure web features disabled', () => {
     allowRunningInsecureContent: false,
     webviewTag: false,
   });
+  expect(createSecureWebPreferences()).not.toHaveProperty('preload');
 });

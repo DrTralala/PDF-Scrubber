@@ -36,6 +36,12 @@ export type DocumentPolicyEvidence = Readonly<{
   pdfUa: StandardPolicyObservation;
 }>;
 
+export function permitsUnstructuredImageInsertion(policy: DocumentPolicyEvidence): boolean {
+  return !policy.markedContent.observed
+    && !policy.structureTree.observed
+    && !policy.pdfUa.observed;
+}
+
 function observation(observed: boolean, confidence: PolicyConfidence): PolicyObservation {
   return Object.freeze({ observed, confidence });
 }

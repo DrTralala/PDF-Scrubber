@@ -1,6 +1,9 @@
+import { isAbsolute, win32 } from 'node:path';
+
 const NETWORK_PROTOCOLS = new Set(['ftp:', 'http:', 'https:', 'ws:', 'wss:']);
 const DIAGNOSTIC_TRUNCATION_LINE = `${JSON.stringify({ event: 'truncated' })}\n`;
 const DIAGNOSTIC_TRUNCATION_BYTES = Buffer.byteLength(DIAGNOSTIC_TRUNCATION_LINE, 'utf8');
+const UNSAVED_TITLE_SUFFIX = ' — Unsaved changes | PDF-Scrubber';
 
 export function createSecureWebPreferences() {
   return Object.freeze({
@@ -58,9 +61,71 @@ export function fontSearchTarget(candidate, editorPage, editorOrigin) {
   }
 }
 
-export function isAllowedSessionPermission(permission, requestingUrl, editorOrigin) {
-  return permission === 'local-fonts'
-    && isAllowedEditorURL(requestingUrl, editorOrigin);
+export function isAllowedSessionPermission(permission, requestingUrl, editorOrigin, details) {
+  if (!isAllowedEditorURL(requestingUrl, editorOrigin)) return false;
+  if (permission === 'local-fonts') return true;
+  return permission === 'fileSystem' && isAllowedPdfFileSystemRequest(details);
+}
+
+export function configureEditorSessionPermissions(session, editorContents, editorOrigin) {
+  // Electron reports isMainFrame=false for fileSystem checks, so bind them to the
+  // main editor WebContents and exact origin instead of trusting that flag.
+  session.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => (
+    contents === editorContents
+      && isAllowedSessionPermission(permission, requestingOrigin, editorOrigin, details)
+  ));
+  session.setPermissionRequestHandler((contents, permission, callback, details) => {
+    const requestingUrl = details?.requestingUrl;
+    callback(contents === editorContents
+      && typeof requestingUrl === 'string'
+      && requestingUrl.length > 0
+      && isAllowedSessionPermission(permission, requestingUrl, editorOrigin, details));
+  });
+  // Leave file-system-access-restricted unhandled: Electron must keep denying its restricted paths.
+}
+
+export function installUnsavedCloseWarning(window, dialog, onPrompt = () => {}) {
+  let attempt = 0;
+  window.webContents.on('will-prevent-unload', (event) => {
+    attempt += 1;
+    onPrompt(attempt);
+    const documentName = documentNameFromTitle(window.webContents.getTitle());
+    let choice;
+    try {
+      choice = dialog.showMessageBoxSync(window, {
+        type: 'warning',
+        title: 'Unsaved changes',
+        message: `Exit without saving changes to “${documentName}”?`,
+        buttons: ['Keep editing', 'Exit without saving'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+    } catch {
+      return;
+    }
+    if (choice === 1) event.preventDefault();
+  });
+}
+
+function documentNameFromTitle(title) {
+  if (typeof title !== 'string' || !title.endsWith(UNSAVED_TITLE_SUFFIX)) return 'this PDF';
+  const documentName = title.slice(0, -UNSAVED_TITLE_SUFFIX.length);
+  return documentName.length > 0 ? documentName : 'this PDF';
+}
+
+function isAllowedPdfFileSystemRequest(details) {
+  if (details === null || typeof details !== 'object'
+    || details.isDirectory !== false
+    || typeof details.filePath !== 'string'
+    || (!isAbsolute(details.filePath) && !win32.isAbsolute(details.filePath))
+    || (details.fileAccessType !== 'readable' && details.fileAccessType !== 'writable')) {
+    return false;
+  }
+  // File System API handles come from the user-selected file picker/drop path;
+  // grant only the exact PDF file and access mode reported by Electron.
+  const fileName = details.filePath.replaceAll('\\', '/').split('/').at(-1);
+  return typeof fileName === 'string' && fileName.toLowerCase().endsWith('.pdf');
 }
 
 export function isAllowedDesktopDownload({ isMainWindow, initiatorOrigin, mimeType, userGesture }, editorOrigin) {

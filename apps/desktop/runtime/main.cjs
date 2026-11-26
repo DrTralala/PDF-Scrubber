@@ -168,6 +168,9 @@ async function startDesktopEditor(paths) {
   });
 
   configureEditorSession(mainWindow);
+  securityPolicy.installUnsavedCloseWarning(mainWindow, dialog, (attempt) => {
+    writeSmokeDiagnostic({ event: `unsaved-close-prompt-${attempt}` });
+  });
   mainWindow.once('ready-to-show', () => {
     const bounds = mainWindow?.getBounds();
     if (bounds !== undefined) {
@@ -204,15 +207,7 @@ function configureEditorSession(window) {
   editorSession.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, callback) => {
     callback({ cancel: !securityPolicy.isAllowedNetworkRequest(details.url, editorOrigin) });
   });
-  editorSession.setPermissionCheckHandler((contents, permission, requestingOrigin) => (
-    contents === window.webContents
-      && securityPolicy.isAllowedSessionPermission(permission, requestingOrigin, editorOrigin)
-  ));
-  editorSession.setPermissionRequestHandler((contents, permission, callback, details) => {
-    const requestingUrl = details.requestingUrl || contents.getURL();
-    callback(contents === window.webContents
-      && securityPolicy.isAllowedSessionPermission(permission, requestingUrl, editorOrigin));
-  });
+  securityPolicy.configureEditorSessionPermissions(editorSession, window.webContents, editorOrigin);
   editorSession.on('will-download', (event, item, contents) => {
     const downloadMetadata = {
       isMainWindow: contents === window.webContents,

@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { lstat, mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import { expect } from '@playwright/test';
 import { PDFDocument } from 'pdf-lib';
@@ -24,10 +24,12 @@ import {
   openPortableSession,
   OwnedProcessQueryError,
   OwnedProcessShutdownError,
+  readPortableDiagnostics,
   readOwnedProcessSnapshot,
   reserveLoopbackPort,
   waitForChildExit,
   waitForDownloadedPdf,
+  waitForDiagnosticRecord,
   waitForOwnedProcessShutdown,
   type OwnedProcessQuery,
   type OwnedProcessSnapshot,
@@ -215,7 +217,28 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
     await apply.click();
     await expect(first.page.getByRole('button', { name: /Portable desktop edit — Editable/ }))
       .toBeVisible({ timeout: 20_000 });
-    await first.page.getByRole('button', { name: 'Download copy' }).click();
+    const supportsSaveAs = await first.page.getByRole('button', { name: 'Save as...' }).count() > 0;
+    let fileSystemPickerSupport = { open: false, save: false };
+    if (supportsSaveAs) {
+      fileSystemPickerSupport = await first.page.evaluate(() => {
+        const pickerWindow = window as Window & {
+          showOpenFilePicker?: unknown;
+          showSaveFilePicker?: unknown;
+        };
+        return {
+          open: typeof pickerWindow.showOpenFilePicker === 'function',
+          save: typeof pickerWindow.showSaveFilePicker === 'function',
+        };
+      });
+      expect(fileSystemPickerSupport).toEqual({ open: true, save: true });
+      await first.page.evaluate(() => {
+        Object.defineProperty(window, 'showSaveFilePicker', { value: undefined, configurable: true });
+      });
+      await first.page.getByRole('button', { name: 'Save as...' }).click();
+      await expect(first.page.getByText(/A copy download was started/)).toBeVisible();
+    } else {
+      await first.page.getByRole('button', { name: 'Download copy' }).click();
+    }
     const downloadPath = await waitForDownloadedPdf(first.downloadDirectory);
     const bytes = new Uint8Array(await readFile(downloadPath));
     const pdf = await PDFDocument.load(bytes);
@@ -225,6 +248,9 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
     const pageText = pageAnalysis.spans.map(({ unicode }) => unicode ?? '').join(' ');
     expect(pageText).toContain('Portable desktop edit');
     expect(remoteRequests).toEqual([]);
+    if (supportsSaveAs) {
+      await expect(first.page).toHaveTitle(`${basename(input.fixture)} — Unsaved changes | PDF-Scrubber`);
+    }
     await first.context.addCookies([{
       name: profileCookie,
       value: profileCookieValue,
@@ -233,7 +259,19 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
       expires: Math.floor(Date.now() / 1000) + 3600,
       httpOnly: true,
     }]);
+    const dirtyCloseCheck = supportsSaveAs ? 'passed' : 'skipped-legacy-editor';
+    if (supportsSaveAs) await exerciseUnsavedCloseFlow(first);
     await closeSession();
+    if (supportsSaveAs) {
+      const promptEvents = (await readPortableDiagnostics(first))
+        .filter(({ event }) => typeof event === 'string' && event.startsWith('unsaved-close-prompt-'))
+        .map(({ event }) => event);
+      expect(promptEvents).toEqual([
+        'unsaved-close-prompt-1',
+        'unsaved-close-prompt-2',
+        'unsaved-close-prompt-3',
+      ]);
+    }
     expect(await readFile(settingsPath)).toEqual(Buffer.from(JSON.stringify({
       schemaVersion: 1,
       window: { width: 1280, height: 860 },
@@ -244,7 +282,17 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
     repeatReadyMs = Date.now() - repeatStart;
     await assertPortableWindow(repeat, 1280, 860);
     await assertProfileCookie(repeat, profileCookie, profileCookieValue);
+    const cleanCloseCheck = supportsSaveAs ? 'passed' : 'skipped-legacy-editor';
+    if (supportsSaveAs) {
+      await sendPortableWindowKey(repeat, 'AltF4');
+      await waitForChildExit(repeat.child, 15_000);
+    }
     await closeSession();
+    if (supportsSaveAs) {
+      const cleanClosePrompts = (await readPortableDiagnostics(repeat))
+        .filter(({ event }) => typeof event === 'string' && event.startsWith('unsaved-close-prompt-'));
+      expect(cleanClosePrompts).toEqual([]);
+    }
 
     await writeFile(settingsPath, customSettings);
     const movedRoot = join(input.temporaryRoot, 'Moved portable application with spaces and café');
@@ -325,6 +373,9 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
       managedPathsChecked: true,
       knownLegacyAppDataUnchanged: true,
       runtimeInventoryUnchanged: true,
+      fileSystemPickerSupport,
+      dirtyCloseCheck,
+      cleanCloseCheck,
       automatedNegativeDialogChecks: false,
       manualNegativeDialogCheck: 'pending',
       directInnerRuntimeNegativeCheck: 'pending',
@@ -332,6 +383,42 @@ export async function runPortableLifecycle(input: PortableLifecycleInput): Promi
   } finally {
     await closeSession();
   }
+}
+
+async function exerciseUnsavedCloseFlow(session: AppSession): Promise<void> {
+  for (const [attempt, response] of [[1, 'Enter'], [2, 'Escape']] as const) {
+    await sendPortableWindowKey(session, 'AltF4');
+    await waitForDiagnosticRecord(
+      () => readPortableDiagnostics(session),
+      `unsaved-close-prompt-${attempt}`,
+      { child: session.child },
+    );
+    await sendPortableWindowKey(session, response);
+    expect(session.page.isClosed()).toBe(false);
+    await expect(session.page.getByTestId('pdf-canvas')).toBeVisible();
+  }
+
+  await sendPortableWindowKey(session, 'AltF4');
+  await waitForDiagnosticRecord(
+    () => readPortableDiagnostics(session),
+    'unsaved-close-prompt-3',
+    { child: session.child },
+  );
+  await sendPortableWindowKey(session, 'TabEnter');
+  await waitForChildExit(session.child, 15_000);
+}
+
+async function sendPortableWindowKey(
+  session: AppSession,
+  key: 'AltF4' | 'Escape' | 'Enter' | 'TabEnter',
+): Promise<void> {
+  await invokeWindowsSmokeHelper([
+    '-Operation', 'SendWindowKey',
+    '-ApplicationRoot', session.applicationRoot,
+    '-LauncherPath', join(session.applicationRoot, 'PDF-Scrubber.exe'),
+    '-RootProcessId', String(session.runtimeProcessId),
+    '-Key', key,
+  ]);
 }
 
 function reportWithoutMasking(

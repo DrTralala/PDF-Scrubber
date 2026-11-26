@@ -135,6 +135,20 @@ describe('worker protocol contracts', () => {
       },
       {
         requestId: 'r12',
+        operation: 'exportPositionedImages',
+        documentId: 'd1',
+        revision: 1,
+        payload: {
+          images: [{
+            pageIndex: 0,
+            bounds: { x: 10, y: 20, width: 30, height: 40 },
+            format: 'png',
+            bytes: new Uint8Array([7, 8, 9]),
+          }],
+        },
+      },
+      {
+        requestId: 'r13',
         operation: 'closeDocument',
         documentId: 'd1',
         revision: 1,
@@ -168,10 +182,45 @@ describe('worker protocol contracts', () => {
       operation: 'registerFont',
       payload: { source: 'local', fileName: 'font.ttf', bytes },
     };
+    const imageBytes = new Uint8Array([4, 5, 6]);
+    const sharedBackingBytes = Uint8Array.of(0, 4, 5, 6, 0);
+    const positionedImagesRequest: EngineRequest = {
+      requestId: 'r-images',
+      operation: 'exportPositionedImages',
+      documentId: 'd1',
+      revision: 1,
+      payload: {
+        images: [{
+          pageIndex: 0,
+          bounds: { x: 1, y: 2, width: 3, height: 4 },
+          format: 'png',
+          bytes: imageBytes,
+        }],
+      },
+    };
+    const partialImageRequest: EngineRequest = {
+      ...positionedImagesRequest,
+      payload: {
+        images: [{
+          ...positionedImagesRequest.payload.images[0]!,
+          bytes: sharedBackingBytes.subarray(1, 4),
+        }],
+      },
+    };
+    const positionedImagesResponse: EngineResponse = {
+      requestId: 'r-images-result',
+      operation: 'exportPositionedImages',
+      ok: true,
+      value: { bytes },
+    };
 
     expect(transferListForRequest(openRequest)).toEqual([bytes]);
     expect(transferListForRequest(registerRequest)).toEqual([bytes]);
+    expect(transferListForRequest(positionedImagesRequest)).toEqual([imageBytes.buffer]);
+    expect(transferListForRequest(partialImageRequest)).toEqual([]);
+    expect(sharedBackingBytes).toEqual(Uint8Array.of(0, 4, 5, 6, 0));
     expect(transferListForResponse(exportResponse)).toEqual([bytes]);
+    expect(transferListForResponse(positionedImagesResponse)).toEqual([bytes]);
     const inventoryResponse: EngineResponse = {
       requestId: 'r-fonts',
       operation: 'inspectDocumentFonts',

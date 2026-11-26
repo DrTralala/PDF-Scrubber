@@ -104,7 +104,7 @@ describe('WorkerTransport', () => {
       requestId: request.requestId,
       operation: 'openDocument',
       ok: true,
-      value: { documentId: 'd2', fingerprint: 'f2', revision: 0 },
+      value: { documentId: 'd2', fingerprint: 'f2', revision: 0, fonts: [], imageInsertionAllowed: true },
     });
 
     await expect(reopened).resolves.toMatchObject({ documentId: 'd2' });

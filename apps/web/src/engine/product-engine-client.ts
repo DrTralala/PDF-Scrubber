@@ -1,4 +1,8 @@
-import type { FontDescriptor, FontSourceKind } from '@pdf-editor/pdf-engine';
+import type {
+  FontDescriptor,
+  FontSourceKind,
+  PositionedImage,
+} from '@pdf-editor/pdf-engine';
 import type {
   AnalysePageResult,
   ApplyRichReplacementResult,
@@ -19,6 +23,11 @@ import type { EngineTransport } from './worker-client';
 export type ValidatedApplyResult = Readonly<{
   revision: number;
   candidateHash: string;
+  bytes: Uint8Array;
+}>;
+
+export type PositionedImageExportResult = Readonly<{
+  revision: number;
   bytes: Uint8Array;
 }>;
 
@@ -198,6 +207,28 @@ export class ProductEngineClient {
     return Object.freeze({
       revision: validation.revision,
       candidateHash: applied.candidateHash,
+      bytes: new Uint8Array(exported.bytes.slice(0)),
+    });
+  }
+
+  /** Returns validated PDF bytes tagged with the captured source revision. */
+  async exportPositionedImages(
+    images: readonly PositionedImage[],
+  ): Promise<PositionedImageExportResult> {
+    const { documentId, revision } = this.#session();
+    const ownedImages = images.map((image) => Object.freeze({
+      ...image,
+      bounds: Object.freeze({ ...image.bounds }),
+      bytes: new Uint8Array(image.bytes),
+    }));
+    const exported = await this.transport.request<Readonly<{ bytes: ArrayBuffer }>>(
+      'exportPositionedImages',
+      { images: ownedImages },
+      ownedImages.map(({ bytes }) => bytes.buffer),
+      { documentId, revision },
+    );
+    return Object.freeze({
+      revision,
       bytes: new Uint8Array(exported.bytes.slice(0)),
     });
   }

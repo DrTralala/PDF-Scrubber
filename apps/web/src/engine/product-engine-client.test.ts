@@ -42,7 +42,7 @@ describe('ProductEngineClient', () => {
   it('requests document fonts with the current revision and no transferables', async () => {
     const fonts = [{ name: 'DejaVuSans', reason: 'embedded-not-reusable' }] as const;
     const transport = new ScriptedTransport([
-      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [] },
+      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [], imageInsertionAllowed: true },
       fonts,
     ]);
     const client = new ProductEngineClient(transport);
@@ -60,7 +60,7 @@ describe('ProductEngineClient', () => {
   it('copies source bytes and completes the atomic apply, validate, and export sequence', async () => {
     const exported = new Uint8Array([9, 8, 7]).buffer;
     const transport = new ScriptedTransport([
-      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [] },
+      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [], imageInsertionAllowed: true },
       { candidateId: 'pending-1', revision: 1, candidateHash: 'candidate' },
       { candidateId: 'pending-1', candidateHash: 'candidate', valid: true, checks: ['ok'], revision: 1 },
       { bytes: exported },
@@ -99,7 +99,7 @@ describe('ProductEngineClient', () => {
 
   it('never exports a candidate rejected by runtime validation', async () => {
     const transport = new ScriptedTransport([
-      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [] },
+      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [], imageInsertionAllowed: true },
       { candidateId: 'pending-1', revision: 1, candidateHash: 'bad' },
       {
         candidateId: 'pending-1',
@@ -128,7 +128,7 @@ describe('ProductEngineClient', () => {
 
   it('rejects validation evidence for a different candidate', async () => {
     const transport = new ScriptedTransport([
-      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [] },
+      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [], imageInsertionAllowed: true },
       { candidateId: 'pending-1', revision: 1, candidateHash: 'candidate' },
       {
         candidateId: 'pending-1',
@@ -173,6 +173,39 @@ describe('ProductEngineClient', () => {
     expect(source).toEqual(Uint8Array.of(1, 2, 3));
   });
 
+  it('copies positioned image bytes and returns the exported revision without advancing it', async () => {
+    const outputBuffer = Uint8Array.of(9, 8, 7).buffer;
+    const transport = new ScriptedTransport([
+      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [], imageInsertionAllowed: true },
+      { bytes: outputBuffer },
+    ]);
+    const client = new ProductEngineClient(transport);
+    const imageBytes = Uint8Array.of(4, 5, 6);
+    await client.open(Uint8Array.of(1));
+
+    const result = await client.exportPositionedImages([{
+      pageIndex: 2,
+      bounds: { x: 10, y: 20, width: 30, height: 40 },
+      format: 'png',
+      bytes: imageBytes,
+    }]);
+
+    const call = transport.calls[1]!;
+    const payload = call.payload as {
+      images: readonly Readonly<{ pageIndex: number; bytes: Uint8Array }>[];
+    };
+    expect(call).toMatchObject({
+      operation: 'exportPositionedImages',
+      envelope: { documentId: 'd1', revision: 0 },
+    });
+    expect(call.transfer).toEqual([payload.images[0]!.bytes.buffer]);
+    expect(payload.images[0]!.bytes.buffer).not.toBe(imageBytes.buffer);
+    expect(imageBytes).toEqual(Uint8Array.of(4, 5, 6));
+    expect(result).toEqual({ revision: 0, bytes: Uint8Array.of(9, 8, 7) });
+    expect(result.bytes.buffer).not.toBe(outputBuffer);
+    expect(client.revision).toBe(0);
+  });
+
   it('previews and atomically validates rich replacements', async () => {
     const richPayload = {
       selection: { lineKey: 'line-1', anchorGlyphIndex: 0, focusGlyphIndex: 2 },
@@ -187,7 +220,7 @@ describe('ProductEngineClient', () => {
       decorations: [],
     };
     const transport = new ScriptedTransport([
-      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [] },
+      { documentId: 'd1', fingerprint: 'abc', revision: 0, fonts: [], imageInsertionAllowed: true },
       {
         commandHash: 'command-1',
         nextRevision: 1,

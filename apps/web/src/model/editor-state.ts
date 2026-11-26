@@ -47,6 +47,9 @@ export type FontInventoryState = 'scanning' | 'ready' | 'failed';
 export type EditorTool = 'select' | 'pan';
 export type FitMode = 'page' | 'width' | 'custom';
 
+export const IMAGE_INSERTION_POLICY_MESSAGE =
+  'Images cannot be added to tagged or PDF/UA PDFs, or when their accessibility structure cannot be inspected and preserved.';
+
 export type EditorError = Readonly<{
   code: string;
   message: string;
@@ -86,6 +89,14 @@ export type EditorRichState = Readonly<{
   preview: RichReplacementPreviewResult | null;
 }>;
 
+export type EditorImagePlacement = Readonly<{
+  id: string;
+  pageIndex: number;
+  bounds: CanonicalBounds;
+  format: 'png' | 'jpeg';
+  previewUrl: string;
+}>;
+
 export type EditorSnapshot = Readonly<{
   phase: EditorPhase;
   generation: number;
@@ -101,11 +112,18 @@ export type EditorSnapshot = Readonly<{
   fontInventoryState: FontInventoryState;
   editingFonts: readonly DocumentEditingFont[];
   selection: EditorSelection | null;
+  images: readonly EditorImagePlacement[];
+  selectedImageId: string | null;
+  imageError: string | null;
+  isDownloading: boolean;
+  isSaving: boolean;
   replacement: string;
   acceptSubstitution: boolean;
   preview: ReplacementPreviewResult | null;
   richEditor: EditorRichState | null;
   hasEdits: boolean;
+  hasUnsavedChanges: boolean;
+  hasWritableFileHandle: boolean;
   downloadAvailable: boolean;
   displayVersion: number;
   status: string;
@@ -205,6 +223,13 @@ export function editorError(error: unknown): EditorError {
       && ENGINE_ERROR_CODES.includes(candidate.code as EngineErrorCode)
       ? candidate.code as EngineErrorCode
       : 'INTERNAL_FAILURE';
+  if (candidate.details?.reason === 'untaggedImageInTaggedDocument') {
+    return Object.freeze({
+      code: 'UNSUPPORTED_DOCUMENT',
+      message: IMAGE_INSERTION_POLICY_MESSAGE,
+      action: 'chooseAnother',
+    });
+  }
   const presentation = ERROR_PRESENTATION[code];
   const resourceMessage = code === 'RESOURCE_LIMIT'
     ? formattedResourceLimit(candidate.details)

@@ -2,25 +2,32 @@ import {
   useEffect,
   useRef,
   useState,
+  type ChangeEvent,
   type FormEvent,
   type JSX,
 } from 'react';
 
 import { downloadPdf } from '../download';
+import { canPickSaveTarget, pickSaveTarget } from '../file-access';
 import type { EditorSnapshot } from '../model/editor-state';
-import type { EditorController } from '../session/editor-controller';
+import type { EditorController, ImageInsertionContext } from '../session/editor-controller';
 import { ResetDialog } from './reset-dialog';
 
 export function EditorChrome({
   controller,
   snapshot,
+  onInsertImage,
 }: Readonly<{
   controller: EditorController;
   snapshot: EditorSnapshot;
+  onInsertImage(file: File, context: Pick<ImageInsertionContext, 'generation' | 'pageIndex'>): void;
 }>): JSX.Element {
   const [pageValue, setPageValue] = useState(String(snapshot.pageIndex + 1));
   const [resetOpen, setResetOpen] = useState(false);
+  const [copyMessage, setCopyMessage] = useState('');
   const resetButtonRef = useRef<HTMLButtonElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const imagePickerContext = useRef<Pick<ImageInsertionContext, 'generation' | 'pageIndex'> | null>(null);
   useEffect(() => {
     setPageValue(String(snapshot.pageIndex + 1));
   }, [snapshot.pageIndex]);
@@ -44,13 +51,55 @@ export function EditorChrome({
   };
 
   const requestReset = (): void => {
-    if (snapshot.hasEdits) setResetOpen(true);
+    if (snapshot.hasEdits || snapshot.hasUnsavedChanges) setResetOpen(true);
     else void controller.reset();
   };
 
   const confirmReset = (): void => {
     void controller.reset();
     restoreResetFocus();
+  };
+
+  const openImagePicker = (): void => {
+    imagePickerContext.current = Object.freeze({
+      generation: snapshot.generation,
+      pageIndex: snapshot.pageIndex,
+    });
+    imageInputRef.current?.click();
+  };
+
+  const acceptImage = (event: ChangeEvent<HTMLInputElement>): void => {
+    const file = event.currentTarget.files?.[0];
+    const context = imagePickerContext.current;
+    if (file !== undefined && context !== null) onInsertImage(file, context);
+    event.currentTarget.value = '';
+  };
+
+  const save = (): void => {
+    setCopyMessage('');
+    void controller.save();
+  };
+
+  const saveAs = async (): Promise<void> => {
+    setCopyMessage('');
+    if (canPickSaveTarget()) {
+      try {
+        const handle = await pickSaveTarget(snapshot.fileName ?? 'document.pdf');
+        if (handle !== null) await controller.saveAs(handle);
+      } catch {
+        setCopyMessage('The PDF could not be saved. Your changes remain unsaved.');
+      }
+      return;
+    }
+    const asset = await controller.downloadCurrentDocument();
+    if (asset === null) {
+      setCopyMessage('The PDF could not be prepared for download. Your changes remain unsaved.');
+      return;
+    }
+    downloadPdf(asset);
+    setCopyMessage(
+      'A copy download was started. The original was not changed; this document remains unsaved.',
+    );
   };
 
   return (
@@ -124,19 +173,52 @@ export function EditorChrome({
         </button>
       </div>
       <div className="document-actions">
-        <button ref={resetButtonRef} type="button" onClick={requestReset}>
+        <input
+          ref={imageInputRef}
+          className="sr-only"
+          aria-label="Choose image to insert"
+          type="file"
+          accept="image/png,image/jpeg,.png,.jpg,.jpeg"
+          tabIndex={-1}
+          onChange={acceptImage}
+        />
+        <button
+          type="button"
+          disabled={!controller.canInsertImages()}
+          onClick={openImagePicker}
+        >
+          Insert image
+        </button>
+        <button
+          ref={resetButtonRef}
+          type="button"
+          disabled={snapshot.isSaving}
+          onClick={requestReset}
+        >
           Reset
         </button>
         <button
           type="button"
-          disabled={!snapshot.downloadAvailable}
-          onClick={() => downloadPdf(controller.download())}
+          disabled={snapshot.isSaving || snapshot.isDownloading || snapshot.phase !== 'ready'}
+          onClick={() => void saveAs()}
         >
-          Download copy
+          Save as...
+        </button>
+        <button
+          type="button"
+          disabled={!snapshot.hasUnsavedChanges || snapshot.isSaving || snapshot.isDownloading || snapshot.phase !== 'ready'}
+          onClick={save}
+        >
+          Save
         </button>
       </div>
+      {copyMessage !== '' && <p className="save-copy-status" aria-live="polite">{copyMessage}</p>}
+      {snapshot.imageError !== null && (
+        <p className="image-error" role="alert">{snapshot.imageError}</p>
+      )}
       <ResetDialog
         open={resetOpen}
+        disabled={snapshot.isSaving}
         onKeep={restoreResetFocus}
         onReset={confirmReset}
       />

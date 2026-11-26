@@ -8,6 +8,7 @@ import {
   acceptRichFontSubstitutions,
   activateByKeyboard,
   expandAllowedWidth,
+  useDownloadOnlyBrowser,
 } from '../../web/tests/editor-interactions';
 
 test('edits and downloads a fixture through the installed production package', async ({ page }) => {
@@ -15,6 +16,7 @@ test('edits and downloads a fixture through the installed production package', a
   if (fixtureRoot === undefined) throw new Error('PDF_SCRUBBER_FIXTURE_ROOT is required');
 
   const remoteRequests = await installNoNetworkGuard(page);
+  await useDownloadOnlyBrowser(page);
   await page.goto('/');
   await page.getByLabel('Open PDF').setInputFiles(resolve(fixtureRoot, '01-simple-tj.pdf'));
   await expect(page.getByTestId('pdf-canvas')).toBeVisible();
@@ -25,13 +27,13 @@ test('edits and downloads a fixture through the installed production package', a
   await expandAllowedWidth(page);
   await acceptRichFontSubstitutions(page);
 
-  const apply = page.getByRole('button', { name: 'Apply replacement' });
+  const apply = page.getByRole('button', { name: 'Apply', exact: true });
   await expect(apply).toBeEnabled();
   await apply.click();
   await expect(page.getByRole('button', { name: /Packaged edit — Editable/ })).toBeVisible();
 
   const downloadEvent = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download copy' }).click();
+  await page.getByRole('button', { name: 'Save as...', exact: true }).click();
   const download = await downloadEvent;
   expect(download.suggestedFilename()).toBe('01-simple-tj-edited.pdf');
   const downloadedPath = await download.path();

@@ -243,6 +243,20 @@ self.onmessage = async ({ data }: MessageEvent<EngineRequest>) => {
         });
         return;
       }
+      case 'exportPositionedImages': {
+        const bytes = await sessions.exportPositionedImages(
+          data.documentId,
+          data.revision,
+          data.payload.images,
+        );
+        post({
+          requestId: data.requestId,
+          operation: data.operation,
+          ok: true,
+          value: { bytes },
+        });
+        return;
+      }
       case 'closeDocument':
         sessions.closeDocument(data.documentId, data.revision);
         post({
