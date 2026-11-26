@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, Menu, screen } = require('electron');
+const { app, BrowserWindow, dialog, Menu, screen, shell } = require('electron');
 const { appendFileSync } = require('node:fs');
 const { basename, dirname, isAbsolute, join, resolve } = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -54,7 +54,17 @@ try {
 }
 
 app.on('web-contents-created', (_event, contents) => {
-  contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  contents.setWindowOpenHandler(({ url }) => {
+    if (contents === mainWindow?.webContents && securityPolicy && editorOrigin) {
+      const target = securityPolicy.fontSearchTarget(url, contents.getURL(), editorOrigin);
+      if (target !== null) {
+        void shell.openExternal(target).catch(() => {
+          dialog.showErrorBox('Font search', 'Windows could not open the font search in your default browser.');
+        });
+      }
+    }
+    return { action: 'deny' };
+  });
   contents.on('will-navigate', (details, navigationUrl) => {
     const url = typeof navigationUrl === 'string' ? navigationUrl : details.url;
     if (!isTrustedEditorURL(url)) details.preventDefault();

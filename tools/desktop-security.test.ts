@@ -6,6 +6,7 @@ import {
   createBoundedDiagnosticWriter,
   createDesktopDownloadDiagnostic,
   createSecureWebPreferences,
+  fontSearchTarget,
   isAllowedDesktopDownload,
   isAllowedEditorURL,
   isAllowedNetworkRequest,
@@ -32,6 +33,18 @@ const smokeDiagnostics = require('../apps/desktop/runtime/smoke-diagnostics.cjs'
 }>;
 
 const editorOrigin = 'http://127.0.0.1:43127';
+
+test('hands off only the Fonts dialog search from the editor, without enabling renderer networking', () => {
+  const link = 'https://fonts2u.com/search.html?q=Noto+Sans';
+  expect(fontSearchTarget(link, `${editorOrigin}/`, editorOrigin)).toBe(link);
+  expect(isAllowedNetworkRequest(link, editorOrigin)).toBe(false);
+  expect(fontSearchTarget(link, 'about:blank', editorOrigin)).toBeNull();
+  for (const invalid of ['https://example.org/search.html?q=Test', 'https://fonts2u.com/',
+    'http://fonts2u.com/search.html?q=Test', `${link}&q=Other`, `${link}&extra=1`, `${link}#extra`,
+    'https://fonts2u.com/search.html?q=']) {
+    expect(fontSearchTarget(invalid, editorOrigin, editorOrigin)).toBeNull();
+  }
+});
 
 test('allows only the exact editor origin for page navigation and renderer requests', () => {
   expect(isAllowedEditorURL(`${editorOrigin}/`, editorOrigin)).toBe(true);

@@ -117,6 +117,8 @@ jobs:
 
       - name: Build editor assets from selected tag
         working-directory: editor-source
+        env:
+          VITE_WINDOWS_PORTABLE: 'true'
         run: npm run build --workspace @pdf-editor/web -- --outDir ../../artifacts/desktop/editor-assets --emptyOutDir
 
       - name: Prepare desktop package

@@ -7,6 +7,8 @@ import type {
 } from '@pdf-editor/pdf-engine';
 
 import { fontRegistrationErrorMessage } from '../fonts/font-registration-error';
+import { normaliseLocalPostscriptName } from '../fonts/local-font-matching';
+import { BrowserLocalFontProvider, localFontAccessErrorMessage, type BrowserLocalFont } from '../fonts/local-font-provider';
 import type { FontInventoryState } from '../model/editor-state';
 
 export type RegisterFont = (
@@ -33,16 +35,34 @@ export function MissingFontsDialog({
   inventoryState,
   editingFonts,
   registerFont,
+  registerLocalFont,
   onClose,
 }: Readonly<{
   inventoryState: FontInventoryState;
   editingFonts: readonly DocumentEditingFont[];
   registerFont: RegisterFont;
+  registerLocalFont?: RegisterFont | undefined;
   onClose(): void;
 }>): JSX.Element {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const [rows, setRows] = useState<Readonly<Record<string, RowState>>>({});
   const inputRefs = useRef(new Map<string, HTMLInputElement>());
+  const [provider] = useState(() => new BrowserLocalFontProvider());
+  const [installed, setInstalled] = useState<readonly BrowserLocalFont[] | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [fontNotice, setFontNotice] = useState('');
+
+  const enableLocalFonts = async (): Promise<void> => {
+    setSearching(true);
+    try {
+      setInstalled(await provider.requestFonts());
+      setFontNotice('Windows fonts checked. Choose a matching font to register it for this document.');
+    } catch (error) {
+      setFontNotice(localFontAccessErrorMessage(error));
+    } finally {
+      setSearching(false);
+    }
+  };
 
   useEffect(() => {
     closeButtonRef.current?.focus();
@@ -55,7 +75,7 @@ export function MissingFontsDialog({
     }));
   };
 
-  const importFont = async (missingName: string, file: File): Promise<void> => {
+  const importFont = async (missingName: string, filename: string, read: () => Promise<Uint8Array>, register: RegisterFont): Promise<void> => {
     setRow(missingName, {
       busy: true,
       message: 'Registering and checking font…',
@@ -63,7 +83,7 @@ export function MissingFontsDialog({
     });
     let bytes: Uint8Array;
     try {
-      bytes = new Uint8Array(await file.arrayBuffer());
+      bytes = await read();
     } catch {
       setRow(missingName, {
         busy: false,
@@ -73,7 +93,7 @@ export function MissingFontsDialog({
       return;
     }
     try {
-      const descriptor = await registerFont(file.name, bytes);
+      const descriptor = await register(filename, bytes);
       const registeredName = descriptor.inspection.fullName
         ?? descriptor.inspection.postscriptName
         ?? descriptor.fileName
@@ -108,6 +128,15 @@ export function MissingFontsDialog({
       }}
     >
       <h2 id="editing-fonts-title">Fonts needed for editing</h2>
+      {registerLocalFont && inventoryState === 'ready' && editingFonts.length > 0 && (
+        <section aria-label="Windows-installed fonts">
+          <p>Look for matching fonts installed in Windows, not fonts embedded in the PDF.</p>
+          <button type="button" disabled={searching || !provider.isSupported()} onClick={() => void enableLocalFonts()}>
+            Enable local fonts
+          </button>
+          <p aria-live="polite">{provider.isSupported() ? fontNotice : 'Windows fonts are unavailable. Import a font file instead.'}</p>
+        </section>
+      )}
       {inventoryState === 'scanning' && <p>Inspecting fonts needed for editing…</p>}
       {inventoryState === 'failed' && (
         <p>We could not inspect this PDF’s font resources.</p>
@@ -119,10 +148,18 @@ export function MissingFontsDialog({
         <ul>
           {editingFonts.map((font) => {
             const row = rows[font.name] ?? EMPTY_ROW;
+            const match = installed?.find((face) => normaliseLocalPostscriptName(face.postscriptName) === normaliseLocalPostscriptName(font.name));
             return (
               <li className="missing-font-row" key={font.name}>
                 <strong>{font.name}</strong>
-                <div className="missing-font-actions">
+                 <div className="missing-font-actions">
+                  {match && registerLocalFont && (
+                    <button type="button" disabled={row.busy} onClick={() => void importFont(font.name,
+                      `${match.postscriptName}.font`, () => provider.readFont(match), registerLocalFont)}>
+                      Use installed {match.fullName}
+                    </button>
+                  )}
+                  {installed && !match && <span>No matching Windows font found.</span>}
                   <button
                     type="button"
                     aria-label={`Import ${font.name}`}
@@ -141,7 +178,8 @@ export function MissingFontsDialog({
                     disabled={row.busy}
                     onChange={(event) => {
                       const file = event.currentTarget.files?.[0];
-                      if (file !== undefined) void importFont(font.name, file);
+                      if (file !== undefined) void importFont(font.name, file.name,
+                        async () => new Uint8Array(await file.arrayBuffer()), registerFont);
                       event.currentTarget.value = '';
                     }}
                   />

@@ -27,6 +27,7 @@ export function isAllowedDesktopDownload(
   editorOrigin: string,
 ): boolean;
 export function isAllowedEditorURL(candidate: string, editorOrigin: string): boolean;
+export function fontSearchTarget(candidate: string, editorPage: string, editorOrigin: string): string | null;
 export function isAllowedNetworkRequest(candidate: string, editorOrigin: string): boolean;
 export function isAllowedSessionPermission(
   permission: string,

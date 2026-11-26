@@ -62,6 +62,9 @@ export function ToolRail({
           inventoryState={snapshot.fontInventoryState}
           editingFonts={snapshot.editingFonts}
           registerFont={(fileName, bytes) => controller.registerFont('upload', fileName, bytes)}
+          registerLocalFont={import.meta.env.VITE_WINDOWS_PORTABLE === 'true'
+            ? (fileName, bytes) => controller.registerFont('local', fileName, bytes)
+            : undefined}
           onClose={closeFontDialog}
         />
       )}

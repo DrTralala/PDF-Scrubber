@@ -5,6 +5,31 @@ import { expect, it, vi } from 'vitest';
 import { deferred, fakeFontDescriptor } from '../test/fakes';
 import { MissingFontsDialog } from './missing-fonts-dialog';
 
+it('only offers installed fonts in portable builds and reads only an explicitly selected match', async () => {
+  const blob = vi.fn(async () => new Blob([Uint8Array.of(4, 5)]));
+  const query = vi.fn(async () => [{ postscriptName: 'Example-Bold', fullName: 'Example Bold', family: 'Example', style: 'Bold', blob }]);
+  vi.stubGlobal('queryLocalFonts', query);
+  const register = vi.fn().mockResolvedValue(fakeFontDescriptor('local', 'Example-Bold.font'));
+  const props = { inventoryState: 'ready' as const, editingFonts: [
+    { name: 'Example-Bold', reason: 'not-embedded' as const },
+    { name: 'Other', reason: 'not-embedded' as const },
+  ], registerFont: vi.fn(), onClose: vi.fn() };
+  try {
+    const { rerender } = render(<MissingFontsDialog {...props} />);
+    expect(screen.queryByRole('button', { name: 'Enable local fonts' })).toBeNull();
+    rerender(<MissingFontsDialog {...props} registerLocalFont={register} />);
+    expect(query).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: 'Enable local fonts' }));
+    expect(blob).not.toHaveBeenCalled();
+    expect(screen.getByText('No matching Windows font found.')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Use installed Example Bold' }));
+    expect(register).toHaveBeenCalledWith('Example-Bold.font', Uint8Array.of(4, 5));
+    expect(props.registerFont).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 it('renders scanning, empty, and failed inventory states', () => {
   const registerFont = vi.fn();
   const onClose = vi.fn();
